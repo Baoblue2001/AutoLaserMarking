@@ -1,0 +1,15 @@
+VISIONMASTER MIGRATION - V6
+
+1. MAIN graphic display
+- MAIN no longer binds VmRenderControl to Image Source.
+- VisionMasterProcess.GetDisplayModule() selects the inspection/result tool (Blob Analysis, Circle Find, Match, Line Find, etc.).
+- VmRenderControl.ModuleSource is bound to that tool, following HIK's official CircleFind sample pattern.
+- In the user's current flow Image Source -> Blob Analysis -> Format -> Image Output, Blob Analysis is selected automatically, so native Blob graphics should render on MAIN.
+- If a module name contains Display or Graphic it is preferred as an explicit display source.
+
+2. Result reading
+- First tries Procedure outputs Result/result/OK/out.
+- If those do not exist, automatically searches the last Format module and reads format_out/Result/out/etc.
+- In the shown flow, Format1.format_out = 18 is therefore returned as result 18 instead of forcing NG=0.
+- PLC ResultCam remains result != 0, preserving the original application's OK/NG behavior.
+- Vision log now includes the source, e.g. Result=18 (Format1.format_out).

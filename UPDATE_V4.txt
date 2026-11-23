@@ -1,0 +1,23 @@
+VISIONMASTER MIGRATION V4
+
+Fixes for 2026-09-26:
+
+1. MAIN display did not refresh after Procedure.Run()
+   - Enables VisionMaster result callbacks before each run.
+   - Enables module callbacks required by VmRenderControl.
+   - Binds VmRenderControl before Run and explicitly refreshes it after Run.
+   - SetRenderInterval(0) is used for immediate rendering.
+
+2. MODEL/Teaching editor did not refresh image/results
+   - Replaced VmProcedureConfigControl with VmMainViewConfigControl.
+   - Enables module/procedure callbacks when the PRC is opened in the editor.
+   - Keeps the same VmProcedure instance while teaching and refreshes the editor after Run.
+   - Param tab editing is enabled.
+
+3. Live Bitmap preview compatibility
+   - Improved ShowBitmap() to create the VMControls.RenderInterface ImageData type by reflection when possible.
+
+Important:
+- The Image Source module in every PRC must use Image Source = SDK.
+- For Model/Teaching: load the PRC, click Run Once, then double-click the module you want to configure if its parameter/render dialog is not already open.
+- The PRC still needs an explicit Result/out output if you want the C# inspection result to be read automatically.

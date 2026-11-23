@@ -1,0 +1,16 @@
+VISIONMASTER V5 UPDATE
+======================
+
+MAIN render fix:
+- VmRenderControl is now bound directly to ImageSourceModuleTool for SDK-injected images.
+- This follows HIK PlatformSDK sample GetResultControl, which calls EnableResultCallback()
+  on the Image Source module and sets vmRenderControl.ModuleSource = moduleImageSource.
+- Previous v4 bound MAIN display to VmProcedure; with Image Source = SDK this can leave
+  the render control blank even though the procedure runs successfully.
+- The display is rebound/refreshed to the Image Source module after each Run and Fit is
+  applied when requested.
+
+Note:
+- This guarantees the acquired/input image is shown on MAIN.
+- Procedure Result is a separate configuration issue. The PRC still needs an explicit
+  procedure output named Result (or compatible output) if C# is expected to receive OK/NG.

@@ -1,0 +1,15 @@
+V7 static validation
+====================
+C# files found: 51
+Compile items: 51
+Missing Compile files: 0
+HintPath items: 29
+Missing HintPath files: 0
+
+Model Save calls InitialAllCameras: NO
+VmMainViewConfigControl created at startup: NO
+VmMainViewConfigControl created on procedure Load: YES
+Procedure Save reloads PRC: NO
+Procedure editor reuses runtime instance when available: YES
+Model Call reloads runtime PRCs: YES
+Model Call reuses already-open cameras: YES

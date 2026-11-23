@@ -1,0 +1,8 @@
+V11 static validation
+- 51/51 Compile items exist.
+- 29/29 HintPath references exist.
+- Modified C# files have balanced braces/parentheses by static check.
+- ProcessImage no longer clones image with new Bitmap(image).
+- VisionMasterProcess uses SetImageData(imageData, false), not wait=true.
+- Per-trigger success log removed from hot path; error logging remains.
+- No full build/run was possible in this Linux container because HIK VisionMaster is a Windows native/managed SDK and the target runtime is not installed here.

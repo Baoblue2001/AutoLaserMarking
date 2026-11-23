@@ -1,0 +1,14 @@
+VisionMaster migration v3
+
+Fix for runtime exception:
+"VisionMaster procedure must expose an image input named 'InputImage' or 'ImageData'."
+
+Changes:
+1. Removed Procedure.ModuParams.SetInputImage_V2(...) for camera image injection.
+2. Uses ImageSourceModuleCs.ImageSourceModuleTool.SetImageData(imageData, true).
+3. Automatically searches common Image Source module names.
+4. Added ImageSourceModuleCs.dll reference and local SDK DLL/XML copy.
+5. Image Source in VisionMaster must be configured as SDK mode.
+
+Recommended PRC setup:
+Image Source (rename to InputImage if desired) -> other VisionMaster tools -> Procedure output Result.

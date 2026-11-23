@@ -1,0 +1,22 @@
+V8 static validation
+====================
+C# files found: 51
+Compile items: 51
+Missing Compile files: 0
+HintPath items: 29
+Missing HintPath files: 0
+All C# source files passed lexical delimiter-balance validation.
+
+Expected V8 markers found:
+- VisionMaster safe RelateIO preload before VmProcedure.Dispose: YES
+- Local assertion-dialog suppression during VM procedure release: YES
+- Idempotent VisionMasterProcess.Dispose: YES
+- Same-PRC runtime reuse on repeated model call: YES
+- Vision runtime synchronization lock: YES
+- Worker-thread shutdown flag/join: YES
+- MAIN ModuleSource release before procedure dispose: YES
+- MODEL editor release before procedure dispose: YES
+- PLC dispose null-check corrected: YES
+
+Runtime note:
+VisionMaster is a Windows SDK and cannot be executed in this Linux sandbox. Build/runtime test should be performed in Visual Studio x64 on the machine PC with HIK VisionMaster installed.

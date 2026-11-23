@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Linq;
 using System.Windows.Forms;
+using Newtonsoft.Json;
 using QRCoder;
 
 namespace SLTtechSoft
@@ -250,6 +251,33 @@ namespace SLTtechSoft
             imageViewport.Controls.SetChildIndex(markingImage, 0);
         }
 
+        private sealed class CapturePositionData
+        {
+            public int ServoX { get; set; }
+            public int ServoY { get; set; }
+        }
+
+        private bool TryLoadCapturePosition(string imageFileName)
+        {
+            try
+            {
+                string sidecarPath = imageFileName + ".position.json";
+                if (!System.IO.File.Exists(sidecarPath)) return false;
+
+                string json = System.IO.File.ReadAllText(sidecarPath);
+                CapturePositionData data = JsonConvert.DeserializeObject<CapturePositionData>(json);
+                if (data == null) return false;
+
+                CurrentParameters.ServoXAtCapture = data.ServoX;
+                CurrentParameters.ServoYAtCapture = data.ServoY;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public void LoadImage(string fileName)
         {
             if (string.IsNullOrWhiteSpace(fileName) || !System.IO.File.Exists(fileName))
@@ -262,6 +290,9 @@ namespace SLTtechSoft
             markingImage.Image = Image.FromFile(fileName);
             if (oldImage != null)
                 oldImage.Dispose();
+
+            // Load servo metadata saved beside this camera image, if available.
+            TryLoadCapturePosition(fileName);
 
             imagePan = Point.Empty;
             FitImageClick(this, EventArgs.Empty);
@@ -380,6 +411,8 @@ namespace SLTtechSoft
                 target.Fiducials.Add(new LaserFiducialParameter { Id = point.Id, PositionX = point.PositionX, PositionY = point.PositionY });
             target.ImagePixelToMM = source.ImagePixelToMM > 0 ? source.ImagePixelToMM : source.ResolutionImage;
             target.ResolutionImageRobot = source.ResolutionImageRobot > 0 ? source.ResolutionImageRobot : source.ResolutionImage;
+            target.ServoXAtCapture = source.ServoXAtCapture;
+            target.ServoYAtCapture = source.ServoYAtCapture;
             return target;
         }
 
@@ -429,7 +462,9 @@ namespace SLTtechSoft
             {
                 ResolutionImage = ParseResolution(resolutionValue.Text, 1f),
                 ImagePixelToMM = ParseResolution(imagePixelToMmValue.Text, 1f),
-                ResolutionImageRobot = ParseResolution(robotResolutionValue.Text, 1f)
+                ResolutionImageRobot = ParseResolution(robotResolutionValue.Text, 1f),
+                ServoXAtCapture = CurrentParameters.ServoXAtCapture,
+                ServoYAtCapture = CurrentParameters.ServoYAtCapture
             };
             foreach (MarkingItem item in markings)
                 result.Markings.Add(new LaserMarkingParameter { Id = item.Id, Product = item.Product, Type = item.Type, PrintType = item.PrintType, Content = item.Content, PositionX = item.Position.X, PositionY = item.Position.Y, Rotate = item.Rotate });
@@ -483,7 +518,16 @@ namespace SLTtechSoft
                 dialog.Filter = "Image files|*.bmp;*.jpg;*.jpeg;*.png;*.gif;*.tif;*.tiff|All files|*.*";
                 dialog.Multiselect = false;
                 if (dialog.ShowDialog(this) == DialogResult.OK)
+                {
                     LoadImage(dialog.FileName);
+
+                    // A manually selected image without metadata has no known capture position.
+                    if (!TryLoadCapturePosition(dialog.FileName))
+                    {
+                        CurrentParameters.ServoXAtCapture = 0;
+                        CurrentParameters.ServoYAtCapture = 0;
+                    }
+                }
             }
         }
 

@@ -3,6 +3,7 @@ using DocumentFormat.OpenXml.Drawing.Charts;
 
 // PLC Connection
 using FluentModbusPLC;
+using Newtonsoft.Json;
 using PlcCommunication;
 using Protocol;
 using SLTtechSoft.Class;
@@ -1143,14 +1144,20 @@ namespace SLTtechSoft
                 return;
 
             int index = camera.No;
+
+            // Snapshot servo coordinates immediately when this camera frame arrives.
+            // Keep the PLC's current integer values unchanged (no unit conversion here).
+            int servoXAtCapture = PLC.Read.WordIntegers[PlcDic.CurentPosX];
+            int servoYAtCapture = PLC.Read.WordIntegers[PlcDic.CurentPosY];
+
             Bitmap image = (Bitmap)e.Image.Clone();
             e.Image.Dispose();
             _VisionSystem[index].CamGrapTime = (int)_VisionSystem[index].CAM.GrabTimeMs;
             // Xử lý ảnh ở camera/background thread
-            ProcessImage(index, image);
+            ProcessImage(index, image, servoXAtCapture, servoYAtCapture);
             image.Dispose();
         }
-        private void ProcessImage(int Cam, Bitmap image)
+        private void ProcessImage(int Cam, Bitmap image, int servoXAtCapture, int servoYAtCapture)
         {
             try
             {
@@ -1171,7 +1178,7 @@ namespace SLTtechSoft
                         {
                             case ModeMachine.Auto:
                                 {
-                                    _VisionSystem[Cam].ResultTriggerOne = TriggerCamAuto(Cam,_VisionSystem[Cam].TriggerIndex, ImageGrap, true, true);
+                                    _VisionSystem[Cam].ResultTriggerOne = TriggerCamAuto(Cam, _VisionSystem[Cam].TriggerIndex, ImageGrap, true, true, servoXAtCapture, servoYAtCapture, true);
                                     _VisionSystem[Cam].FinishTrigger = true;
                                    
                                     break;
@@ -1339,7 +1346,7 @@ namespace SLTtechSoft
                 default: break;
             }
         }
-        public int TriggerCamAuto(int cam,int index, ImageInfo cogImage8Grey, bool IsFitImage, bool IsFilmStrip)
+        public int TriggerCamAuto(int cam, int index, ImageInfo cogImage8Grey, bool IsFitImage, bool IsFilmStrip, int servoXAtCapture = 0, int servoYAtCapture = 0, bool hasServoPosition = false)
         {
             Stopwatch stopWatch = Stopwatch.StartNew();
             int result = 0;
@@ -1373,7 +1380,7 @@ namespace SLTtechSoft
                     default: break;
                 }
                 int indexExport = 0;
-                CreatFilmStripOne(cam, indexExport, result, IsFilmStrip, cogImage8Grey?.Image);
+                CreatFilmStripOne(cam, indexExport, result, IsFilmStrip, cogImage8Grey?.Image, servoXAtCapture, servoYAtCapture, hasServoPosition);
             }
             catch (VM.PlatformSDKCS.VmException ex)
             {
@@ -1531,7 +1538,33 @@ namespace SLTtechSoft
         public string FirstTimeTrigger = "";
         private Bitmap ImageShowFilmStip = null;
         private bool IsGettingResult = false;
-        private void CreatFilmStripOne(int cam, int index, int result, bool Enable, Bitmap sourceImage = null)
+        private sealed class CapturePositionData
+        {
+            public int ServoX { get; set; }
+            public int ServoY { get; set; }
+        }
+
+        private void SaveCapturePositionSidecar(string imageFilePath, int servoX, int servoY)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(imageFilePath)) return;
+                string sidecarPath = imageFilePath + ".position.json";
+                string json = JsonConvert.SerializeObject(new CapturePositionData
+                {
+                    ServoX = servoX,
+                    ServoY = servoY
+                }, Formatting.Indented);
+                File.WriteAllText(sidecarPath, json);
+            }
+            catch (Exception ex)
+            {
+                WriteLogPC(LogType.Vision, "SaveCapturePositionSidecar", ex.Message);
+            }
+        }
+
+        private void CreatFilmStripOne(int cam, int index, int result, bool Enable, Bitmap sourceImage = null,
+            int servoXAtCapture = 0, int servoYAtCapture = 0, bool hasServoPosition = false)
         {
             // Manual trigger passes Enable=false. The old guard had been commented out, so even a
             // manual click performed directory creation, render capture/JPEG save and synchronous
@@ -1576,6 +1609,8 @@ namespace SLTtechSoft
             string thisPathFileGraphic = subpathGraphic + "\\" + FileName + ".jpg";
 
             SaveImageGraphic(thisPathFileGraphic, cam, index, sourceImage);
+            if (hasServoPosition && formOption.Parameters.Cam[cam].SaveGraphic && File.Exists(thisPathFileGraphic))
+                SaveCapturePositionSidecar(thisPathFileGraphic, servoXAtCapture, servoYAtCapture);
 
             IsGettingResult = true;
             CamJigNo[cam]++;
@@ -1596,8 +1631,19 @@ namespace SLTtechSoft
             if (original == null && _VisionSystem[cam].VisionProcesses != null && index < _VisionSystem[cam].VisionProcesses.Length)
                 original = _VisionSystem[cam].VisionProcesses[index]?.LastInputImage;
 
-            if (formOption.Parameters.Cam[cam].SaveOrigin && original != null) original.Save(thisPathFileOrigin, ImageFormat.Jpeg);
-            if (formOption.Parameters.Cam[cam].SaveOriginSeparate && original != null) original.Save(thisPathFileOriginSeparate, ImageFormat.Jpeg);
+            if (formOption.Parameters.Cam[cam].SaveOrigin && original != null)
+            {
+                original.Save(thisPathFileOrigin, ImageFormat.Jpeg);
+                if (hasServoPosition)
+                    SaveCapturePositionSidecar(thisPathFileOrigin, servoXAtCapture, servoYAtCapture);
+            }
+
+            if (formOption.Parameters.Cam[cam].SaveOriginSeparate && original != null)
+            {
+                original.Save(thisPathFileOriginSeparate, ImageFormat.Jpeg);
+                if (hasServoPosition)
+                    SaveCapturePositionSidecar(thisPathFileOriginSeparate, servoXAtCapture, servoYAtCapture);
+            }
 
         
         }

@@ -498,6 +498,7 @@ namespace SLTtechSoft
             target.StitchOriginX = source.StitchOriginX;
             target.StitchOriginY = source.StitchOriginY;
             target.StitchPixelToMM = source.StitchPixelToMM;
+            target.ImageLocalCoordinateVersion = source.ImageLocalCoordinateVersion;
             foreach (LaserScanImageParameter picture in source.ScanImages ?? new List<LaserScanImageParameter>())
                 target.ScanImages.Add(new LaserScanImageParameter
                 {
@@ -577,7 +578,8 @@ namespace SLTtechSoft
                 HasStitchCoordinateSystem = CurrentParameters.HasStitchCoordinateSystem,
                 StitchOriginX = CurrentParameters.StitchOriginX,
                 StitchOriginY = CurrentParameters.StitchOriginY,
-                StitchPixelToMM = CurrentParameters.StitchPixelToMM
+                StitchPixelToMM = CurrentParameters.StitchPixelToMM,
+                ImageLocalCoordinateVersion = 1
             };
             foreach (LaserScanImageParameter picture in CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
                 result.ScanImages.Add(new LaserScanImageParameter
@@ -597,6 +599,7 @@ namespace SLTtechSoft
 
         private void LoadCurrentSurfaceToControls()
         {
+            MigrateNormalizedImageLocalCoordinates();
             loadingSurfaceControls = true;
             DeleteAllMarkingClick(this, EventArgs.Empty);
             DeleteAllFiducials();
@@ -1122,6 +1125,50 @@ namespace SLTtechSoft
             }
         }
 
+        private void MigrateNormalizedImageLocalCoordinates()
+        {
+            if (CurrentParameters.ImageLocalCoordinateVersion >= 1)
+                return;
+
+            bool changed = false;
+            foreach (LaserMarkingParameter marking in CurrentParameters.Markings ?? new List<LaserMarkingParameter>())
+            {
+                if (string.IsNullOrWhiteSpace(marking.ImageId)) continue;
+                ImageTileInfo tile = FindImageTile(marking.ImageId);
+                if (tile == null) continue;
+
+                // The buggy mapping inverted full-image edge vectors, so saved local points
+                // from that build are normalized fractions instead of source pixels.
+                if (Math.Abs(marking.PositionX) <= 1.001 && Math.Abs(marking.PositionY) <= 1.001)
+                {
+                    marking.PositionX *= tile.SourceWidth;
+                    marking.PositionY *= tile.SourceHeight;
+                    changed = true;
+                }
+            }
+
+            foreach (LaserFiducialParameter point in CurrentParameters.Fiducials ?? new List<LaserFiducialParameter>())
+            {
+                if (string.IsNullOrWhiteSpace(point.ImageId)) continue;
+                ImageTileInfo tile = FindImageTile(point.ImageId);
+                if (tile == null) continue;
+
+                if (Math.Abs(point.PositionX) <= 1.001 && Math.Abs(point.PositionY) <= 1.001)
+                {
+                    point.PositionX *= tile.SourceWidth;
+                    point.PositionY *= tile.SourceHeight;
+                    changed = true;
+                }
+            }
+
+            CurrentParameters.ImageLocalCoordinateVersion = 1;
+            if (changed)
+            {
+                if (currentSurface == LaserSurface.Top) topParameters = CurrentParameters;
+                else botParameters = CurrentParameters;
+            }
+        }
+
         private void RepositionImageBoundItems()
         {
             foreach (MarkingItem item in markings)
@@ -1273,8 +1320,10 @@ namespace SLTtechSoft
                                     SourceWidth = image.Width,
                                     SourceHeight = image.Height,
                                     CanvasOrigin = p00,
-                                    CanvasXAxis = new PointF(p10.X - p00.X, p10.Y - p00.Y),
-                                    CanvasYAxis = new PointF(p01.X - p00.X, p01.Y - p00.Y),
+                                    // Store the canvas displacement of ONE source pixel, not the full image edge.
+                                    // CanvasToSource then returns real source-image pixel coordinates.
+                                    CanvasXAxis = new PointF((p10.X - p00.X) / image.Width, (p10.Y - p00.Y) / image.Width),
+                                    CanvasYAxis = new PointF((p01.X - p00.X) / image.Height, (p01.Y - p00.Y) / image.Height),
                                     Scale = 1f
                                 });
                             }

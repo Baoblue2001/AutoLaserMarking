@@ -28,9 +28,16 @@ namespace SLTtechSoft
         public double ImagePixelToMM = 1.0;
         public double ResolutionImageRobot = 1.0;
 
-        // PLC servo position captured with the image used for this surface setup.
-        public int ServoXAtCapture = 0;
-        public int ServoYAtCapture = 0;
+        // Each scanned image has its own servo position; image paths are relative to the model folder.
+        public List<LaserScanImageParameter> ScanImages = new List<LaserScanImageParameter>();
+    }
+
+    public class LaserScanImageParameter
+    {
+        public string ImagePath = "";
+        public int ServoX;
+        public int ServoY;
+        public DateTime CaptureTime;
     }
 
     public class LaserMarkingParameter

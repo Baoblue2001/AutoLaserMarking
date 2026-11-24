@@ -934,124 +934,80 @@ namespace SLTtechSoft
                     string targetFolder = Path.Combine(modelFolderPath, "LaserPictures", surfaceFolder);
                     Directory.CreateDirectory(targetFolder);
 
-                    // When even one image has no Servo XY, show every image in a contact sheet.
-                    // This is only a visual staging preview; it is not a coordinate-accurate stitch.
-                    if (!allHaveCoordinates)
-                    {
-                        parameters.HasStitchCoordinateSystem = false;
-                        int thumbWidth = 320;
-                        int thumbHeight = 240;
-                        int columns = Math.Min(3, loaded.Count);
-                        int rows = (int)Math.Ceiling(loaded.Count / (double)columns);
-                        int cellWidth = thumbWidth + 24;
-                        int cellHeight = thumbHeight + 48;
-                        int canvasWidth = columns * cellWidth + 24;
-                        int canvasHeight = rows * cellHeight + 24;
-                        using (Bitmap canvas = new Bitmap(canvasWidth, canvasHeight, PixelFormat.Format24bppRgb))
-                        using (Graphics graphics = Graphics.FromImage(canvas))
-                        using (Font font = new Font("Segoe UI", 9f))
-                        using (Brush textBrush = new SolidBrush(Color.White))
-                        using (Brush backgroundBrush = new SolidBrush(Color.FromArgb(45, 45, 45)))
-                        {
-                            graphics.Clear(Color.FromArgb(32, 32, 32));
-                            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                            for (int i = 0; i < loaded.Count; i++)
-                            {
-                                Bitmap image = loaded[i].Item2;
-                                int col = i % columns;
-                                int row = i / columns;
-                                int cellX = 12 + col * cellWidth;
-                                int cellY = 12 + row * cellHeight;
-                                graphics.FillRectangle(backgroundBrush, cellX, cellY, cellWidth - 8, cellHeight - 8);
-                                double factor = Math.Min(thumbWidth / (double)image.Width, thumbHeight / (double)image.Height);
-                                int drawWidth = Math.Max(1, (int)Math.Round(image.Width * factor));
-                                int drawHeight = Math.Max(1, (int)Math.Round(image.Height * factor));
-                                int drawX = cellX + (cellWidth - drawWidth) / 2;
-                                int drawY = cellY + 4 + (thumbHeight - drawHeight) / 2;
-                                graphics.DrawImage(image, new Rectangle(drawX, drawY, drawWidth, drawHeight));
-                                string name = Path.GetFileName(loaded[i].Item1.ImagePath);
-                                if (name.Length > 42) name = name.Substring(0, 39) + "...";
-                                graphics.DrawString(name, font, textBrush, cellX + 6, cellY + thumbHeight + 10);
-                            }
+                    // Always render a visual contact sheet. Servo coordinates and ImagePixelToMM
+                    // are deliberately excluded from layout: each source image occupies its own tile.
+                    parameters.HasStitchCoordinateSystem = false;
+                    parameters.StitchPixelToMM = 0;
+                    int thumbWidth = 480;
+                    int thumbHeight = 360;
+                    int columns = Math.Min(3, loaded.Count);
+                    int rows = (int)Math.Ceiling(loaded.Count / (double)columns);
+                    int cellWidth = thumbWidth + 32;
+                    int cellHeight = thumbHeight + 58;
+                    int canvasWidth = columns * cellWidth + 24;
+                    int canvasHeight = rows * cellHeight + 24;
+                    List<ImageTileInfo> newTiles = new List<ImageTileInfo>();
 
-                            outputPath = Path.Combine(targetFolder, "Preview_" + surfaceFolder + ".png");
-                            string temp = outputPath + "." + Guid.NewGuid().ToString("N") + ".tmp.png";
-                            canvas.Save(temp, ImageFormat.Png);
-                            if (File.Exists(outputPath)) File.Delete(outputPath);
-                            File.Move(temp, outputPath);
+                    using (Bitmap canvas = new Bitmap(canvasWidth, canvasHeight, PixelFormat.Format24bppRgb))
+                    using (Graphics graphics = Graphics.FromImage(canvas))
+                    using (Font font = new Font("Segoe UI", 9f))
+                    using (Brush textBrush = new SolidBrush(Color.White))
+                    using (Brush backgroundBrush = new SolidBrush(Color.FromArgb(45, 45, 45)))
+                    using (Pen tilePen = new Pen(Color.FromArgb(95, 125, 145), 1f))
+                    {
+                        graphics.Clear(Color.FromArgb(32, 32, 32));
+                        graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        graphics.SmoothingMode = SmoothingMode.HighQuality;
+
+                        for (int i = 0; i < loaded.Count; i++)
+                        {
+                            Bitmap image = loaded[i].Item2;
+                            LaserScanImageParameter picture = loaded[i].Item1;
+                            if (string.IsNullOrWhiteSpace(picture.Id))
+                                picture.Id = Guid.NewGuid().ToString("N");
+
+                            int col = i % columns;
+                            int row = i / columns;
+                            int cellX = 12 + col * cellWidth;
+                            int cellY = 12 + row * cellHeight;
+                            graphics.FillRectangle(backgroundBrush, cellX, cellY, cellWidth - 8, cellHeight - 8);
+
+                            double factor = Math.Min(thumbWidth / (double)image.Width, thumbHeight / (double)image.Height);
+                            int drawWidth = Math.Max(1, (int)Math.Round(image.Width * factor));
+                            int drawHeight = Math.Max(1, (int)Math.Round(image.Height * factor));
+                            int drawX = cellX + (cellWidth - drawWidth) / 2;
+                            int drawY = cellY + 4 + (thumbHeight - drawHeight) / 2;
+                            graphics.DrawImage(image, new Rectangle(drawX, drawY, drawWidth, drawHeight));
+                            graphics.DrawRectangle(tilePen, drawX, drawY, drawWidth - 1, drawHeight - 1);
+
+                            newTiles.Add(new ImageTileInfo
+                            {
+                                ImageId = picture.Id,
+                                DisplayBounds = new RectangleF(drawX, drawY, drawWidth, drawHeight),
+                                SourceWidth = image.Width,
+                                SourceHeight = image.Height,
+                                Scale = (float)factor
+                            });
+
+                            string name = Path.GetFileName(picture.ImagePath);
+                            if (name.Length > 42) name = name.Substring(0, 39) + "...";
+                            string servo = picture.ServoX.HasValue && picture.ServoY.HasValue
+                                ? string.Format("X:{0:0.##}  Y:{1:0.##} mm", picture.ServoX.Value, picture.ServoY.Value)
+                                : "Servo X/Y not set";
+                            graphics.DrawString(name + "   " + servo, font, textBrush, cellX + 6, cellY + thumbHeight + 12);
                         }
+
+                        outputPath = Path.Combine(targetFolder, "Preview_" + surfaceFolder + ".png");
+                        string temp = outputPath + "." + Guid.NewGuid().ToString("N") + ".tmp.png";
+                        canvas.Save(temp, ImageFormat.Png);
+                        if (File.Exists(outputPath)) File.Delete(outputPath);
+                        File.Move(temp, outputPath);
                     }
-                    else
+
+                    if (surface == currentSurface)
                     {
-                        // Servo XY is the centre point of each captured image.
-                        // ImagePixelToMM is the only scale: millimetres represented by one source pixel.
-                        // The optional transform is applied before calculating the physical layout.
-                        double mmPerPixel = parameters.ImagePixelToMM > 0 ? parameters.ImagePixelToMM : 1.0;
-                        Func<LaserScanImageParameter, Tuple<double, double>> getPosition = picture =>
-                        {
-                            double x = picture.ServoX.Value;
-                            double y = picture.ServoY.Value;
-                            if (parameters.EnableServoAxisTransform)
-                            {
-                                if (parameters.SwapServoAxes)
-                                {
-                                    double temp = x; x = y; y = temp;
-                                }
-                                if (parameters.ReverseServoX) x = -x;
-                                if (parameters.ReverseServoY) y = -y;
-                            }
-                            return Tuple.Create(x, y);
-                        };
-
-                        var positioned = loaded.Select(item => new
-                        {
-                            Image = item.Item2,
-                            Picture = item.Item1,
-                            Position = getPosition(item.Item1)
-                        }).ToList();
-
-                        double minLeft = double.MaxValue, maxRight = double.MinValue;
-                        double minBottom = double.MaxValue, maxTop = double.MinValue;
-                        foreach (var item in positioned)
-                        {
-                            double halfWidth = item.Image.Width * mmPerPixel / 2.0;
-                            double halfHeight = item.Image.Height * mmPerPixel / 2.0;
-                            minLeft = Math.Min(minLeft, item.Position.Item1 - halfWidth);
-                            maxRight = Math.Max(maxRight, item.Position.Item1 + halfWidth);
-                            minBottom = Math.Min(minBottom, item.Position.Item2 - halfHeight);
-                            maxTop = Math.Max(maxTop, item.Position.Item2 + halfHeight);
-                        }
-
-                        int canvasWidth = (int)Math.Ceiling((maxRight - minLeft) / mmPerPixel);
-                        int canvasHeight = (int)Math.Ceiling((maxTop - minBottom) / mmPerPixel);
-                        parameters.HasStitchCoordinateSystem = true;
-                        parameters.StitchOriginX = minLeft;
-                        parameters.StitchOriginY = maxTop;
-                        parameters.StitchPixelToMM = mmPerPixel;
-                        if (canvasWidth <= 0 || canvasHeight <= 0 || canvasWidth > 30000 || canvasHeight > 30000 ||
-                            (long)canvasWidth * canvasHeight > 180000000L)
-                            throw new InvalidOperationException("The stitched image would be too large. Check ImagePixelToMM and Servo XY values.");
-
-                        using (Bitmap canvas = new Bitmap(canvasWidth, canvasHeight, PixelFormat.Format24bppRgb))
-                        using (Graphics graphics = Graphics.FromImage(canvas))
-                        {
-                            graphics.Clear(Color.Black);
-                            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                            foreach (var item in positioned)
-                            {
-                                // Servo XY is the centre of this source image.
-                                int x = (int)Math.Round((item.Position.Item1 - item.Image.Width * mmPerPixel / 2.0 - minLeft) / mmPerPixel);
-                                int y = (int)Math.Round((maxTop - (item.Position.Item2 + item.Image.Height * mmPerPixel / 2.0)) / mmPerPixel);
-                                graphics.DrawImage(item.Image, new Rectangle(x, y, item.Image.Width, item.Image.Height));
-                            }
-
-                            outputPath = Path.Combine(targetFolder, "Stitched_" + surfaceFolder + ".png");
-                            string temp = outputPath + "." + Guid.NewGuid().ToString("N") + ".tmp.png";
-                            canvas.Save(temp, ImageFormat.Png);
-                            if (File.Exists(outputPath)) File.Delete(outputPath);
-                            File.Move(temp, outputPath);
-                        }
+                        imageTiles.Clear();
+                        imageTiles.AddRange(newTiles);
                     }
                 }
                 else

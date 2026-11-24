@@ -787,7 +787,7 @@ namespace SLTtechSoft
             if (!File.Exists(path)) return;
 
             picturePreviewActive = true;
-            LoadImage(path, false, false); // Temporary preview; do not replace the stitched-image path.
+            LoadImage(path, true, false); // Fit the temporary single-image preview without replacing the stitched path.
         }
 
         private void PictureGridMouseLeave(object sender, EventArgs e)
@@ -797,7 +797,7 @@ namespace SLTtechSoft
 
             string stitchedPath = currentSurface == LaserSurface.Top ? topImageFileName : botImageFileName;
             if (File.Exists(stitchedPath))
-                LoadImage(stitchedPath, false, false);
+                LoadImage(stitchedPath, true, false);
             else
                 RebuildSurfaceImage(currentSurface);
         }

@@ -293,6 +293,11 @@ namespace SLTtechSoft
 
         public void LoadImage(string fileName)
         {
+            LoadImage(fileName, true);
+        }
+
+        private void LoadImage(string fileName, bool fitToViewport)
+        {
             if (string.IsNullOrWhiteSpace(fileName) || !System.IO.File.Exists(fileName))
                 return;
 
@@ -309,8 +314,15 @@ namespace SLTtechSoft
             if (oldImage != null)
                 oldImage.Dispose();
 
-            imagePan = Point.Empty;
-            FitImageClick(this, EventArgs.Empty);
+            if (fitToViewport)
+            {
+                imagePan = Point.Empty;
+                FitImageClick(this, EventArgs.Empty);
+            }
+            else
+            {
+                UpdateImageTransform();
+            }
         }
 
         private void WireEvents()
@@ -489,6 +501,7 @@ namespace SLTtechSoft
             btnBot.BackColor = surface == LaserSurface.Bot ? Color.LightGreen : Color.WhiteSmoke;
             LoadSurfaceImage(surface == LaserSurface.Top ? topImageFileName : botImageFileName);
             LoadCurrentSurfaceToControls();
+            FitImageClick(this, EventArgs.Empty);
         }
 
         private static string GetTopImageFile(CamPara camera)
@@ -500,7 +513,7 @@ namespace SLTtechSoft
         private void LoadSurfaceImage(string fileName)
         {
             if (!string.IsNullOrWhiteSpace(fileName) && System.IO.File.Exists(fileName))
-                LoadImage(fileName);
+                LoadImage(fileName, false);
             else
             {
                 Image oldImage = markingImage.Image;
@@ -974,6 +987,8 @@ namespace SLTtechSoft
                     }
                 }
 
+                if (bestTile == null && imageTiles.Count == 1)
+                    return Tuple.Create(imageTiles[0].ImageId, oldPixel);
                 return bestTile == null ? null : Tuple.Create(bestTile.ImageId, bestLocal);
             };
 
@@ -2525,6 +2540,7 @@ namespace SLTtechSoft
             {
                 if (mode <= 2) item.Position = new PointF(value, item.Position.Y);
                 else item.Position = new PointF(item.Position.X, y);
+                ClampPosition(item);
                 UpdateMarkingView(item); UpdateMarkingRow(item);
             }
             UpdatePositionControls(selectedMarking);
@@ -2561,6 +2577,7 @@ namespace SLTtechSoft
             {
                 float coordinate = first + (last - first) * i / (ordered.Count - 1);
                 ordered[i].Position = horizontal ? new PointF(coordinate, ordered[i].Position.Y) : new PointF(ordered[i].Position.X, coordinate);
+                ClampPosition(ordered[i]);
                 UpdateMarkingView(ordered[i]);
                 UpdateMarkingRow(ordered[i]);
             }

@@ -502,7 +502,7 @@ namespace SLTtechSoft
                     CaptureTime = picture.CaptureTime
                 });
             foreach (MarkingItem item in markings)
-                result.Markings.Add(new LaserMarkingParameter { Id = item.Id, Product = item.Product, Type = item.Type, PrintType = item.PrintType, Content = item.Content, PositionX = item.Position.Item1, PositionY = item.Position.Item2, Rotate = item.Rotate });
+                result.Markings.Add(new LaserMarkingParameter { Id = item.Id, Product = item.Product, Type = item.Type, PrintType = item.PrintType, Content = item.Content, PositionX = item.Position.X, PositionY = item.Position.Y, Rotate = item.Rotate });
             foreach (FiducialItem point in fiducials)
                 result.Fiducials.Add(new LaserFiducialParameter { Id = point.Id, PositionX = point.Position.X, PositionY = point.Position.Y });
             return result;
@@ -967,10 +967,10 @@ namespace SLTtechSoft
                         {
                             double halfWidth = item.Image.Width * mmPerPixel / 2.0;
                             double halfHeight = item.Image.Height * mmPerPixel / 2.0;
-                            minLeft = Math.Min(minLeft, item.Position.X - halfWidth);
-                            maxRight = Math.Max(maxRight, item.Position.X + halfWidth);
-                            minBottom = Math.Min(minBottom, item.Position.Y - halfHeight);
-                            maxTop = Math.Max(maxTop, item.Position.Y + halfHeight);
+                            minLeft = Math.Min(minLeft, item.Position.Item1 - halfWidth);
+                            maxRight = Math.Max(maxRight, item.Position.Item1 + halfWidth);
+                            minBottom = Math.Min(minBottom, item.Position.Item2 - halfHeight);
+                            maxTop = Math.Max(maxTop, item.Position.Item2 + halfHeight);
                         }
 
                         int canvasWidth = (int)Math.Ceiling((maxRight - minLeft) / mmPerPixel);
@@ -988,8 +988,8 @@ namespace SLTtechSoft
                             foreach (var item in positioned)
                             {
                                 // Servo XY is the centre of this source image.
-                                int x = (int)Math.Round((item.Position.X - item.Image.Width * mmPerPixel / 2.0 - minLeft) / mmPerPixel);
-                                int y = (int)Math.Round((maxTop - (item.Position.Y + item.Image.Height * mmPerPixel / 2.0)) / mmPerPixel);
+                                int x = (int)Math.Round((item.Position.Item1 - item.Image.Width * mmPerPixel / 2.0 - minLeft) / mmPerPixel);
+                                int y = (int)Math.Round((maxTop - (item.Position.Item2 + item.Image.Height * mmPerPixel / 2.0)) / mmPerPixel);
                                 graphics.DrawImage(item.Image, new Rectangle(x, y, item.Image.Width, item.Image.Height));
                             }
 

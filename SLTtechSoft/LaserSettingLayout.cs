@@ -502,7 +502,7 @@ namespace SLTtechSoft
                     CaptureTime = picture.CaptureTime
                 });
             foreach (MarkingItem item in markings)
-                result.Markings.Add(new LaserMarkingParameter { Id = item.Id, Product = item.Product, Type = item.Type, PrintType = item.PrintType, Content = item.Content, PositionX = item.Position.X, PositionY = item.Position.Y, Rotate = item.Rotate });
+                result.Markings.Add(new LaserMarkingParameter { Id = item.Id, Product = item.Product, Type = item.Type, PrintType = item.PrintType, Content = item.Content, PositionX = item.Position.Item1, PositionY = item.Position.Item2, Rotate = item.Rotate });
             foreach (FiducialItem point in fiducials)
                 result.Fiducials.Add(new LaserFiducialParameter { Id = point.Id, PositionX = point.Position.X, PositionY = point.Position.Y });
             return result;
@@ -579,17 +579,17 @@ namespace SLTtechSoft
             reverseServoX = new CheckBox
             {
                 Name = "reverseServoX",
-                Text = "Reverse X",
+                Text = "Flip X",
                 AutoSize = true,
-                Location = new Point(157, 34),
+                Location = new Point(145, 34),
                 BackColor = Color.Transparent
             };
             reverseServoY = new CheckBox
             {
                 Name = "reverseServoY",
-                Text = "Reverse Y",
+                Text = "Flip Y",
                 AutoSize = true,
-                Location = new Point(238, 34),
+                Location = new Point(215, 34),
                 BackColor = Color.Transparent
             };
 
@@ -951,7 +951,7 @@ namespace SLTtechSoft
                                 if (parameters.ReverseServoX) x = -x;
                                 if (parameters.ReverseServoY) y = -y;
                             }
-                            return new PointF((float)x, (float)y);
+                            return Tuple.Create(x, y);
                         };
 
                         var positioned = loaded.Select(item => new

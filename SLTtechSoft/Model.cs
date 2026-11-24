@@ -68,6 +68,7 @@ namespace SLTtechSoft
         {
             _form1 = obj;
             laserSettingLayout.SaveAllRequested += LaserSettingLayoutSaveAllRequested;
+            laserSettingLayout.ScanImageRequested += LaserSettingLayout_ScanImageRequested;
 
             InitialFormVisionSetup();
 
@@ -386,6 +387,22 @@ namespace SLTtechSoft
         {
             if (SaveAModel()) SaveCurrentModelInfomation(true);
         }
+
+        private void LaserSettingLayout_ScanImageRequested(Action<Bitmap, int, int> onCaptured)
+        {
+            string modelFile = currentModelInfomation.PathFileModel;
+            if (string.IsNullOrWhiteSpace(modelFile) || !File.Exists(modelFile))
+            {
+                MessageBox.Show("Please save the current Model before using Scan Image.", "Scan Image", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            laserSettingLayout.SetModelFolderPath(Path.GetDirectoryName(modelFile));
+
+            // Laser Setting currently stores its parameters in Cam[0], so use Camera 1.
+            if (_form1 == null || !_form1.RequestLaserSetupCapture(0, onCaptured))
+                MessageBox.Show("Camera 1 is not ready, or another Scan Image request is still waiting for a frame.", "Scan Image", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
         private void ModelTalbeCall_Click(object sender, EventArgs e)
         {
             if (!_form1.formOption.Parameters.Option.CallModelManual)
@@ -696,6 +713,7 @@ namespace SLTtechSoft
                 _form1.ModelNoInternal = ModelNo;
                 currentModelInfomation.ModelNo = ModelNo;
                 currentModelInfomation.PathFileModel = fileName;
+                laserSettingLayout.SetModelFolderPath(Path.GetDirectoryName(fileName));
 
                 ReadAModelParameter(fileName);
                 ShowAModelParameter(modelParameter);

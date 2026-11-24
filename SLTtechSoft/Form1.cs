@@ -1136,28 +1136,78 @@ namespace SLTtechSoft
 
             WriteLogPC(LogType.Vision, $"Cam{camera.No}", $"{e.Message}, 0x{e.Message}");
         }
+        private readonly object _laserSetupCaptureSync = new object();
+        private Action<Bitmap, int, int> _pendingLaserSetupCapture;
+        private int _pendingLaserSetupCaptureCamera = -1;
+
+        /// <summary>Request one camera frame for Laser Setup and pair it with the servo position at frame arrival.</summary>
+        public bool RequestLaserSetupCapture(int cameraIndex, Action<Bitmap, int, int> onCaptured)
+        {
+            if (onCaptured == null || _VisionSystem == null || cameraIndex < 0 || cameraIndex >= _VisionSystem.Length
+                || _VisionSystem[cameraIndex] == null || _VisionSystem[cameraIndex].CAM == null
+                || !_VisionSystem[cameraIndex].CAM.IsOpen)
+                return false;
+
+            lock (_laserSetupCaptureSync)
+            {
+                if (_pendingLaserSetupCapture != null) return false;
+                _pendingLaserSetupCapture = onCaptured;
+                _pendingLaserSetupCaptureCamera = cameraIndex;
+            }
+
+            // Continuous mode: use the next incoming frame. Software-trigger mode: request one frame.
+            if (_VisionSystem[cameraIndex].CAM.AcquisitionMode != CameraAcquisitionMode.Continuous)
+                AcqStart(cameraIndex);
+            return true;
+        }
+
         private void Camera_ImageReceived(object sender,CameraImageEventArgs e)
         {
             ICamera camera = sender as ICamera;
-
-            if (camera == null)
-                return;
+            if (camera == null) return;
 
             int index = camera.No;
+            Action<Bitmap, int, int> scanCallback = null;
+            lock (_laserSetupCaptureSync)
+            {
+                if (_pendingLaserSetupCapture != null && _pendingLaserSetupCaptureCamera == index)
+                {
+                    scanCallback = _pendingLaserSetupCapture;
+                    _pendingLaserSetupCapture = null;
+                    _pendingLaserSetupCaptureCamera = -1;
+                }
+            }
 
-            // Snapshot servo coordinates immediately when this camera frame arrives.
-            // Keep the PLC's current integer values unchanged (no unit conversion here).
-            int servoXAtCapture = PLC.Read.WordIntegers[PlcDic.CurentPosX];
-            int servoYAtCapture = PLC.Read.WordIntegers[PlcDic.CurentPosY];
+            if (scanCallback != null)
+            {
+                Bitmap scanImage = null;
+                try
+                {
+                    // Read PLC positions only for the requested setup image, not for every camera frame.
+                    int servoX = PLC.Read.WordIntegers[PlcDic.CurentPosX];
+                    int servoY = PLC.Read.WordIntegers[PlcDic.CurentPosY];
+                    scanImage = (Bitmap)e.Image.Clone();
+                    scanCallback(scanImage, servoX, servoY);
+                    scanImage = null; // ownership passed to callback
+                }
+                catch (Exception ex)
+                {
+                    WriteLogPC(LogType.Vision, "Laser Setup Scan", ex.Message);
+                }
+                finally
+                {
+                    if (scanImage != null) scanImage.Dispose();
+                }
+            }
 
             Bitmap image = (Bitmap)e.Image.Clone();
             e.Image.Dispose();
             _VisionSystem[index].CamGrapTime = (int)_VisionSystem[index].CAM.GrabTimeMs;
             // Xử lý ảnh ở camera/background thread
-            ProcessImage(index, image, servoXAtCapture, servoYAtCapture);
+            ProcessImage(index, image);
             image.Dispose();
         }
-        private void ProcessImage(int Cam, Bitmap image, int servoXAtCapture, int servoYAtCapture)
+        private void ProcessImage(int Cam, Bitmap image)
         {
             try
             {
@@ -1178,7 +1228,7 @@ namespace SLTtechSoft
                         {
                             case ModeMachine.Auto:
                                 {
-                                    _VisionSystem[Cam].ResultTriggerOne = TriggerCamAuto(Cam, _VisionSystem[Cam].TriggerIndex, ImageGrap, true, true, servoXAtCapture, servoYAtCapture, true);
+                                    _VisionSystem[Cam].ResultTriggerOne = TriggerCamAuto(Cam,_VisionSystem[Cam].TriggerIndex, ImageGrap, true, true);
                                     _VisionSystem[Cam].FinishTrigger = true;
                                    
                                     break;
@@ -1346,7 +1396,7 @@ namespace SLTtechSoft
                 default: break;
             }
         }
-        public int TriggerCamAuto(int cam, int index, ImageInfo cogImage8Grey, bool IsFitImage, bool IsFilmStrip, int servoXAtCapture = 0, int servoYAtCapture = 0, bool hasServoPosition = false)
+        public int TriggerCamAuto(int cam,int index, ImageInfo cogImage8Grey, bool IsFitImage, bool IsFilmStrip)
         {
             Stopwatch stopWatch = Stopwatch.StartNew();
             int result = 0;
@@ -1380,7 +1430,7 @@ namespace SLTtechSoft
                     default: break;
                 }
                 int indexExport = 0;
-                CreatFilmStripOne(cam, indexExport, result, IsFilmStrip, cogImage8Grey?.Image, servoXAtCapture, servoYAtCapture, hasServoPosition);
+                CreatFilmStripOne(cam, indexExport, result, IsFilmStrip, cogImage8Grey?.Image);
             }
             catch (VM.PlatformSDKCS.VmException ex)
             {
@@ -1538,33 +1588,7 @@ namespace SLTtechSoft
         public string FirstTimeTrigger = "";
         private Bitmap ImageShowFilmStip = null;
         private bool IsGettingResult = false;
-        private sealed class CapturePositionData
-        {
-            public int ServoX { get; set; }
-            public int ServoY { get; set; }
-        }
-
-        private void SaveCapturePositionSidecar(string imageFilePath, int servoX, int servoY)
-        {
-            try
-            {
-                if (string.IsNullOrWhiteSpace(imageFilePath)) return;
-                string sidecarPath = imageFilePath + ".position.json";
-                string json = JsonConvert.SerializeObject(new CapturePositionData
-                {
-                    ServoX = servoX,
-                    ServoY = servoY
-                }, Newtonsoft.Json.Formatting.Indented);
-                File.WriteAllText(sidecarPath, json);
-            }
-            catch (Exception ex)
-            {
-                WriteLogPC(LogType.Vision, "SaveCapturePositionSidecar", ex.Message);
-            }
-        }
-
-        private void CreatFilmStripOne(int cam, int index, int result, bool Enable, Bitmap sourceImage = null,
-            int servoXAtCapture = 0, int servoYAtCapture = 0, bool hasServoPosition = false)
+        private void CreatFilmStripOne(int cam, int index, int result, bool Enable, Bitmap sourceImage = null)
         {
             // Manual trigger passes Enable=false. The old guard had been commented out, so even a
             // manual click performed directory creation, render capture/JPEG save and synchronous
@@ -1609,9 +1633,6 @@ namespace SLTtechSoft
             string thisPathFileGraphic = subpathGraphic + "\\" + FileName + ".jpg";
 
             SaveImageGraphic(thisPathFileGraphic, cam, index, sourceImage);
-            if (hasServoPosition && formOption.Parameters.Cam[cam].SaveGraphic && File.Exists(thisPathFileGraphic))
-                SaveCapturePositionSidecar(thisPathFileGraphic, servoXAtCapture, servoYAtCapture);
-
             IsGettingResult = true;
             CamJigNo[cam]++;
             try
@@ -1631,19 +1652,8 @@ namespace SLTtechSoft
             if (original == null && _VisionSystem[cam].VisionProcesses != null && index < _VisionSystem[cam].VisionProcesses.Length)
                 original = _VisionSystem[cam].VisionProcesses[index]?.LastInputImage;
 
-            if (formOption.Parameters.Cam[cam].SaveOrigin && original != null)
-            {
-                original.Save(thisPathFileOrigin, ImageFormat.Jpeg);
-                if (hasServoPosition)
-                    SaveCapturePositionSidecar(thisPathFileOrigin, servoXAtCapture, servoYAtCapture);
-            }
-
-            if (formOption.Parameters.Cam[cam].SaveOriginSeparate && original != null)
-            {
-                original.Save(thisPathFileOriginSeparate, ImageFormat.Jpeg);
-                if (hasServoPosition)
-                    SaveCapturePositionSidecar(thisPathFileOriginSeparate, servoXAtCapture, servoYAtCapture);
-            }
+            if (formOption.Parameters.Cam[cam].SaveOrigin && original != null) original.Save(thisPathFileOrigin, ImageFormat.Jpeg);
+            if (formOption.Parameters.Cam[cam].SaveOriginSeparate && original != null) original.Save(thisPathFileOriginSeparate, ImageFormat.Jpeg);
 
         
         }

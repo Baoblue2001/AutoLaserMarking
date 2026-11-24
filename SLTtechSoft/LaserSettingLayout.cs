@@ -2604,14 +2604,15 @@ namespace SLTtechSoft
         {
             if (markingImage.Image == null || wheelDelta == 0) return;
 
-            // Keep the pixel under the cursor fixed throughout the animation.
+            // Convert the cursor position using the bitmap's actual integer display size.
+            // This avoids sub-pixel drift caused by rounding PictureBox.Width/Height.
             Point imagePoint = markingImage.PointToClient(imageViewport.PointToScreen(viewportPoint));
-            zoomAnchorImageX = imagePoint.X / imageZoom;
-            zoomAnchorImageY = imagePoint.Y / imageZoom;
+            zoomAnchorImageX = imagePoint.X * (double)markingImage.Image.Width / Math.Max(1, markingImage.Width);
+            zoomAnchorImageY = imagePoint.Y * (double)markingImage.Image.Height / Math.Max(1, markingImage.Height);
             zoomAnchor = viewportPoint;
 
             float startingZoom = zoomAnimationTimer.Enabled ? targetZoom : imageZoom;
-            float zoomFactor = (float)Math.Pow(1.15, wheelDelta / 120.0);
+            float zoomFactor = (float)Math.Pow(1.12, wheelDelta / 120.0);
             targetZoom = Math.Max(0.05f, Math.Min(12f, startingZoom * zoomFactor));
             if (Math.Abs(targetZoom - imageZoom) < 0.0001f)
             {
@@ -2643,14 +2644,17 @@ namespace SLTtechSoft
         {
             imageZoom = newZoom;
 
-            // Keep the image pixel under the cursor at exactly the same viewport position.
-            int scaledWidth = Math.Max(100, (int)(markingImage.Image.Width * imageZoom));
-            int scaledHeight = Math.Max(100, (int)(markingImage.Image.Height * imageZoom));
+            // Use the effective X/Y scales after integer sizing, not the requested
+            // floating-point zoom. The same source pixel therefore stays under the cursor.
+            int scaledWidth = Math.Max(100, (int)Math.Round(markingImage.Image.Width * imageZoom));
+            int scaledHeight = Math.Max(100, (int)Math.Round(markingImage.Image.Height * imageZoom));
+            double effectiveScaleX = (double)scaledWidth / markingImage.Image.Width;
+            double effectiveScaleY = (double)scaledHeight / markingImage.Image.Height;
             int baseLeft = (imageViewport.ClientSize.Width - scaledWidth) / 2;
             int baseTop = (imageViewport.ClientSize.Height - scaledHeight) / 2;
             imagePan = new Point(
-                (int)Math.Round(viewportPoint.X - imageX * imageZoom - baseLeft),
-                (int)Math.Round(viewportPoint.Y - imageY * imageZoom - baseTop));
+                (int)Math.Round(viewportPoint.X - imageX * effectiveScaleX - baseLeft),
+                (int)Math.Round(viewportPoint.Y - imageY * effectiveScaleY - baseTop));
             UpdateImageTransform();
         }
 

@@ -175,6 +175,11 @@ namespace SLTtechSoft
         private string botImageFileName = "";
         private string modelFolderPath = "";
         private bool refreshingPictureGrid;
+        private bool refreshingAxisControls;
+        private CheckBox enableAxisTransform;
+        private CheckBox swapServoAxes;
+        private CheckBox reverseServoX;
+        private CheckBox reverseServoY;
         private readonly List<MarkingItem> copiedMarkings = new List<MarkingItem>();
         private const float MarkingFontSize = 9.75f;
 
@@ -183,6 +188,7 @@ namespace SLTtechSoft
             InitializeComponent();
             KeyPreview = true;
             ConfigurePictureGrid();
+            ConfigureAxisTransformControls();
             ConfigureImageViewport();
             InitializeMarkingList();
             WireEvents();
@@ -408,6 +414,10 @@ namespace SLTtechSoft
                 target.Fiducials.Add(new LaserFiducialParameter { Id = point.Id, PositionX = point.PositionX, PositionY = point.PositionY });
             target.ImagePixelToMM = source.ImagePixelToMM > 0 ? source.ImagePixelToMM : source.ResolutionImage;
             target.ResolutionImageRobot = source.ResolutionImageRobot > 0 ? source.ResolutionImageRobot : source.ResolutionImage;
+            target.EnableServoAxisTransform = source.EnableServoAxisTransform;
+            target.SwapServoAxes = source.SwapServoAxes;
+            target.ReverseServoX = source.ReverseServoX;
+            target.ReverseServoY = source.ReverseServoY;
             foreach (LaserScanImageParameter picture in source.ScanImages ?? new List<LaserScanImageParameter>())
                 target.ScanImages.Add(new LaserScanImageParameter
                 {
@@ -477,7 +487,11 @@ namespace SLTtechSoft
             {
                 ResolutionImage = ParseResolution(resolutionValue.Text, 1f),
                 ImagePixelToMM = ParseResolution(imagePixelToMmValue.Text, 1f),
-                ResolutionImageRobot = ParseResolution(robotResolutionValue.Text, 1f)
+                ResolutionImageRobot = ParseResolution(robotResolutionValue.Text, 1f),
+                EnableServoAxisTransform = enableAxisTransform != null && enableAxisTransform.Checked,
+                SwapServoAxes = swapServoAxes != null && swapServoAxes.Checked,
+                ReverseServoX = reverseServoX != null && reverseServoX.Checked,
+                ReverseServoY = reverseServoY != null && reverseServoY.Checked
             };
             foreach (LaserScanImageParameter picture in CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
                 result.ScanImages.Add(new LaserScanImageParameter
@@ -501,6 +515,18 @@ namespace SLTtechSoft
             resolutionValue.Text = CurrentParameters.ResolutionImage.ToString("0.########");
             imagePixelToMmValue.Text = CurrentParameters.ImagePixelToMM.ToString("0.########");
             robotResolutionValue.Text = CurrentParameters.ResolutionImageRobot.ToString("0.########");
+            if (enableAxisTransform != null)
+            {
+                refreshingAxisControls = true;
+                enableAxisTransform.Checked = CurrentParameters.EnableServoAxisTransform;
+                swapServoAxes.Checked = CurrentParameters.SwapServoAxes;
+                reverseServoX.Checked = CurrentParameters.ReverseServoX;
+                reverseServoY.Checked = CurrentParameters.ReverseServoY;
+                swapServoAxes.Enabled = enableAxisTransform.Checked;
+                reverseServoX.Enabled = enableAxisTransform.Checked;
+                reverseServoY.Enabled = enableAxisTransform.Checked;
+                refreshingAxisControls = false;
+            }
             foreach (LaserMarkingParameter marking in CurrentParameters.Markings ?? new List<LaserMarkingParameter>())
                 AddMarking(marking.Type, new PointF((float)marking.PositionX, (float)marking.PositionY), marking.Id, marking.Product, marking.PrintType, marking.Content,marking.Rotate);
             NormalizeMarkingOrder();
@@ -530,6 +556,69 @@ namespace SLTtechSoft
             if (currentSurface == LaserSurface.Top) topParameters = CloneSurface(savedTopParameters);
             else botParameters = CloneSurface(savedBotParameters);
             LoadCurrentSurfaceToControls();
+        }
+
+        private void ConfigureAxisTransformControls()
+        {
+            enableAxisTransform = new CheckBox
+            {
+                Name = "enableAxisTransform",
+                Text = "Enable",
+                AutoSize = true,
+                Location = new Point(5, 34),
+                BackColor = Color.Transparent
+            };
+            swapServoAxes = new CheckBox
+            {
+                Name = "swapServoAxes",
+                Text = "Swap X/Y",
+                AutoSize = true,
+                Location = new Point(72, 34),
+                BackColor = Color.Transparent
+            };
+            reverseServoX = new CheckBox
+            {
+                Name = "reverseServoX",
+                Text = "Reverse X",
+                AutoSize = true,
+                Location = new Point(157, 34),
+                BackColor = Color.Transparent
+            };
+            reverseServoY = new CheckBox
+            {
+                Name = "reverseServoY",
+                Text = "Reverse Y",
+                AutoSize = true,
+                Location = new Point(238, 34),
+                BackColor = Color.Transparent
+            };
+
+            panel7.Controls.Add(enableAxisTransform);
+            panel7.Controls.Add(swapServoAxes);
+            panel7.Controls.Add(reverseServoX);
+            panel7.Controls.Add(reverseServoY);
+
+            dgvListPictureSub.Location = new Point(5, 57);
+            dgvListPictureSub.Size = new Size(214, 103);
+            btnAddPicture.Location = new Point(227, 57);
+            btnDeletePic.Location = new Point(227, 91);
+            btnPicDeleteAll.Location = new Point(227, 125);
+
+            enableAxisTransform.CheckedChanged += AxisTransformChanged;
+            swapServoAxes.CheckedChanged += AxisTransformChanged;
+            reverseServoX.CheckedChanged += AxisTransformChanged;
+            reverseServoY.CheckedChanged += AxisTransformChanged;
+        }
+
+        private void AxisTransformChanged(object sender, EventArgs e)
+        {
+            if (refreshingAxisControls) return;
+            bool enabled = enableAxisTransform.Checked;
+            swapServoAxes.Enabled = enabled;
+            reverseServoX.Enabled = enabled;
+            reverseServoY.Enabled = enabled;
+            SaveCurrentSurfaceToMemory();
+            RebuildSurfaceImage(currentSurface);
         }
 
         private void ConfigurePictureGrid()
@@ -780,69 +869,141 @@ namespace SLTtechSoft
                     catch { }
                 }
 
-                List<Tuple<LaserScanImageParameter, Bitmap>> positioned =
-                    loaded.Where(x => x.Item1.ServoX.HasValue && x.Item1.ServoY.HasValue).ToList();
-
                 string outputPath = "";
-                if (positioned.Count == 0)
+                bool allHaveCoordinates = loaded.Count > 0 &&
+                    loaded.All(x => x.Item1.ServoX.HasValue && x.Item1.ServoY.HasValue);
+
+                if (loaded.Count == 0)
                 {
-                    if (loaded.Count > 0)
-                        outputPath = ResolvePicturePath(loaded[0].Item1);
-                    else if (clearWhenNoPictures)
-                        outputPath = "";
-                    else if (parameters.ScanImages != null && parameters.ScanImages.Count > 0)
+                    if (clearWhenNoPictures || (parameters.ScanImages != null && parameters.ScanImages.Count > 0))
                         outputPath = "";
                     else
                         outputPath = surface == LaserSurface.Top ? topImageFileName : botImageFileName;
                 }
                 else if (!string.IsNullOrWhiteSpace(modelFolderPath))
                 {
-                    // Servo XY are millimetres. ImagePixelToMM is interpreted as mm per source pixel.
-                    // Servo XY is the centre point of each captured image; positive Y is upward.
-                    double mmPerPixel = parameters.ImagePixelToMM > 0 ? parameters.ImagePixelToMM : 1.0;
-                    double minLeft = double.MaxValue, maxRight = double.MinValue;
-                    double minBottom = double.MaxValue, maxTop = double.MinValue;
+                    string surfaceFolder = surface == LaserSurface.Top ? "TOP" : "BOT";
+                    string targetFolder = Path.Combine(modelFolderPath, "LaserPictures", surfaceFolder);
+                    Directory.CreateDirectory(targetFolder);
 
-                    foreach (var item in positioned)
+                    // When even one image has no Servo XY, show every image in a contact sheet.
+                    // This is only a visual staging preview; it is not a coordinate-accurate stitch.
+                    if (!allHaveCoordinates)
                     {
-                        double halfWidth = item.Item2.Width * mmPerPixel / 2.0;
-                        double halfHeight = item.Item2.Height * mmPerPixel / 2.0;
-                        minLeft = Math.Min(minLeft, item.Item1.ServoX.Value - halfWidth);
-                        maxRight = Math.Max(maxRight, item.Item1.ServoX.Value + halfWidth);
-                        minBottom = Math.Min(minBottom, item.Item1.ServoY.Value - halfHeight);
-                        maxTop = Math.Max(maxTop, item.Item1.ServoY.Value + halfHeight);
+                        int thumbWidth = 320;
+                        int thumbHeight = 240;
+                        int columns = Math.Min(3, loaded.Count);
+                        int rows = (int)Math.Ceiling(loaded.Count / (double)columns);
+                        int cellWidth = thumbWidth + 24;
+                        int cellHeight = thumbHeight + 48;
+                        int canvasWidth = columns * cellWidth + 24;
+                        int canvasHeight = rows * cellHeight + 24;
+                        using (Bitmap canvas = new Bitmap(canvasWidth, canvasHeight, PixelFormat.Format24bppRgb))
+                        using (Graphics graphics = Graphics.FromImage(canvas))
+                        using (Font font = new Font("Segoe UI", 9f))
+                        using (Brush textBrush = new SolidBrush(Color.White))
+                        using (Brush backgroundBrush = new SolidBrush(Color.FromArgb(45, 45, 45)))
+                        {
+                            graphics.Clear(Color.FromArgb(32, 32, 32));
+                            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                            for (int i = 0; i < loaded.Count; i++)
+                            {
+                                Bitmap image = loaded[i].Item2;
+                                int col = i % columns;
+                                int row = i / columns;
+                                int cellX = 12 + col * cellWidth;
+                                int cellY = 12 + row * cellHeight;
+                                graphics.FillRectangle(backgroundBrush, cellX, cellY, cellWidth - 8, cellHeight - 8);
+                                double factor = Math.Min(thumbWidth / (double)image.Width, thumbHeight / (double)image.Height);
+                                int drawWidth = Math.Max(1, (int)Math.Round(image.Width * factor));
+                                int drawHeight = Math.Max(1, (int)Math.Round(image.Height * factor));
+                                int drawX = cellX + (cellWidth - drawWidth) / 2;
+                                int drawY = cellY + 4 + (thumbHeight - drawHeight) / 2;
+                                graphics.DrawImage(image, new Rectangle(drawX, drawY, drawWidth, drawHeight));
+                                string name = Path.GetFileName(loaded[i].Item1.ImagePath);
+                                if (name.Length > 42) name = name.Substring(0, 39) + "...";
+                                graphics.DrawString(name, font, textBrush, cellX + 6, cellY + thumbHeight + 10);
+                            }
+
+                            outputPath = Path.Combine(targetFolder, "Preview_" + surfaceFolder + ".png");
+                            string temp = outputPath + "." + Guid.NewGuid().ToString("N") + ".tmp.png";
+                            canvas.Save(temp, ImageFormat.Png);
+                            if (File.Exists(outputPath)) File.Delete(outputPath);
+                            File.Move(temp, outputPath);
+                        }
                     }
-
-                    int canvasWidth = (int)Math.Ceiling((maxRight - minLeft) / mmPerPixel);
-                    int canvasHeight = (int)Math.Ceiling((maxTop - minBottom) / mmPerPixel);
-                    if (canvasWidth <= 0 || canvasHeight <= 0 || canvasWidth > 30000 || canvasHeight > 30000 ||
-                        (long)canvasWidth * canvasHeight > 180000000L)
-                        throw new InvalidOperationException("The stitched image would be too large. Check the image scale and Servo XY values.");
-
-                    using (Bitmap canvas = new Bitmap(canvasWidth, canvasHeight, PixelFormat.Format24bppRgb))
-                    using (Graphics graphics = Graphics.FromImage(canvas))
+                    else
                     {
-                        graphics.Clear(Color.Black);
-                        graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                        graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                        // Servo XY is the centre point of each captured image.
+                        // ImagePixelToMM is the only scale: millimetres represented by one source pixel.
+                        // The optional transform is applied before calculating the physical layout.
+                        double mmPerPixel = parameters.ImagePixelToMM > 0 ? parameters.ImagePixelToMM : 1.0;
+                        Func<LaserScanImageParameter, PointF> getPosition = picture =>
+                        {
+                            double x = picture.ServoX.Value;
+                            double y = picture.ServoY.Value;
+                            if (parameters.EnableServoAxisTransform)
+                            {
+                                if (parameters.SwapServoAxes)
+                                {
+                                    double temp = x; x = y; y = temp;
+                                }
+                                if (parameters.ReverseServoX) x = -x;
+                                if (parameters.ReverseServoY) y = -y;
+                            }
+                            return new PointF((float)x, (float)y);
+                        };
+
+                        var positioned = loaded.Select(item => new
+                        {
+                            Image = item.Item2,
+                            Picture = item.Item1,
+                            Position = getPosition(item.Item1)
+                        }).ToList();
+
+                        double minLeft = double.MaxValue, maxRight = double.MinValue;
+                        double minBottom = double.MaxValue, maxTop = double.MinValue;
                         foreach (var item in positioned)
                         {
-                            int x = (int)Math.Round((item.Item1.ServoX.Value -
-                                item.Item2.Width * mmPerPixel / 2.0 - minLeft) / mmPerPixel);
-                            int y = (int)Math.Round((maxTop -
-                                (item.Item1.ServoY.Value + item.Item2.Height * mmPerPixel / 2.0)) / mmPerPixel);
-                            graphics.DrawImage(item.Item2, new Rectangle(x, y, item.Item2.Width, item.Item2.Height));
+                            double halfWidth = item.Image.Width * mmPerPixel / 2.0;
+                            double halfHeight = item.Image.Height * mmPerPixel / 2.0;
+                            minLeft = Math.Min(minLeft, item.Position.X - halfWidth);
+                            maxRight = Math.Max(maxRight, item.Position.X + halfWidth);
+                            minBottom = Math.Min(minBottom, item.Position.Y - halfHeight);
+                            maxTop = Math.Max(maxTop, item.Position.Y + halfHeight);
                         }
 
-                        string surfaceFolder = surface == LaserSurface.Top ? "TOP" : "BOT";
-                        string targetFolder = Path.Combine(modelFolderPath, "LaserPictures", surfaceFolder);
-                        Directory.CreateDirectory(targetFolder);
-                        outputPath = Path.Combine(targetFolder, "Stitched_" + surfaceFolder + ".png");
-                        string temporaryPath = outputPath + "." + Guid.NewGuid().ToString("N") + ".tmp.png";
-                        canvas.Save(temporaryPath, ImageFormat.Png);
-                        if (File.Exists(outputPath)) File.Delete(outputPath);
-                        File.Move(temporaryPath, outputPath);
+                        int canvasWidth = (int)Math.Ceiling((maxRight - minLeft) / mmPerPixel);
+                        int canvasHeight = (int)Math.Ceiling((maxTop - minBottom) / mmPerPixel);
+                        if (canvasWidth <= 0 || canvasHeight <= 0 || canvasWidth > 30000 || canvasHeight > 30000 ||
+                            (long)canvasWidth * canvasHeight > 180000000L)
+                            throw new InvalidOperationException("The stitched image would be too large. Check ImagePixelToMM and Servo XY values.");
+
+                        using (Bitmap canvas = new Bitmap(canvasWidth, canvasHeight, PixelFormat.Format24bppRgb))
+                        using (Graphics graphics = Graphics.FromImage(canvas))
+                        {
+                            graphics.Clear(Color.Black);
+                            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                            foreach (var item in positioned)
+                            {
+                                // Servo XY is the centre of this source image.
+                                int x = (int)Math.Round((item.Position.X - item.Image.Width * mmPerPixel / 2.0 - minLeft) / mmPerPixel);
+                                int y = (int)Math.Round((maxTop - (item.Position.Y + item.Image.Height * mmPerPixel / 2.0)) / mmPerPixel);
+                                graphics.DrawImage(item.Image, new Rectangle(x, y, item.Image.Width, item.Image.Height));
+                            }
+
+                            outputPath = Path.Combine(targetFolder, "Stitched_" + surfaceFolder + ".png");
+                            string temp = outputPath + "." + Guid.NewGuid().ToString("N") + ".tmp.png";
+                            canvas.Save(temp, ImageFormat.Png);
+                            if (File.Exists(outputPath)) File.Delete(outputPath);
+                            File.Move(temp, outputPath);
+                        }
                     }
+                }
+                else
+                {
+                    outputPath = ResolvePicturePath(loaded[0].Item1);
                 }
 
                 if (surface == LaserSurface.Top) topImageFileName = outputPath;
@@ -1449,6 +1610,22 @@ namespace SLTtechSoft
         {
             foreach (MarkingItem item in markings) UpdateMarkingRow(item);
             UpdatePositionControls(selectedMarking);
+
+            if (ReferenceEquals(sender, imagePixelToMmValue))
+            {
+                double scale;
+                if (double.TryParse(imagePixelToMmValue.Text, NumberStyles.Float,
+                    CultureInfo.CurrentCulture, out scale) ||
+                    double.TryParse(imagePixelToMmValue.Text, NumberStyles.Float,
+                    CultureInfo.InvariantCulture, out scale))
+                {
+                    if (scale > 0 && !double.IsNaN(scale) && !double.IsInfinity(scale))
+                    {
+                        SaveCurrentSurfaceToMemory();
+                        RebuildSurfaceImage(currentSurface);
+                    }
+                }
+            }
         }
 
         private void SelectionMouseDown(object sender, MouseEventArgs e)

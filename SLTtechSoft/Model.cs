@@ -635,6 +635,7 @@ namespace SLTtechSoft
 
                 currentModelInfomation.ModelNo = modelNo;
                 currentModelInfomation.PathFileModel = fileName;
+                laserSettingLayout.SetModelFolderPath(folder);
                 modelTable.Table.Rows[modelNo].Cells[col.Name].Value = modelParameter.ModelName;
                 modelTable.Table.Rows[modelNo].Cells[col.File].Value = fileName;
                 if (_form1.formMain != null) _form1.formMain.ModelName.Text = modelParameter.ModelName;

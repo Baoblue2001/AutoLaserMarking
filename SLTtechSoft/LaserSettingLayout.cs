@@ -1026,6 +1026,26 @@ namespace SLTtechSoft
                 return bestTile == null ? null : Tuple.Create(bestTile.ImageId, bestLocal);
             };
 
+            foreach (LaserMarkingParameter marking in CurrentParameters.Markings ?? new List<LaserMarkingParameter>())
+            {
+                if (!string.IsNullOrWhiteSpace(marking.ImageId)) continue;
+                Tuple<string, PointF> migrated = findSourcePoint(new PointF((float)marking.PositionX, (float)marking.PositionY));
+                if (migrated == null) continue;
+                marking.ImageId = migrated.Item1;
+                marking.PositionX = migrated.Item2.X;
+                marking.PositionY = migrated.Item2.Y;
+            }
+
+            foreach (LaserFiducialParameter point in CurrentParameters.Fiducials ?? new List<LaserFiducialParameter>())
+            {
+                if (!string.IsNullOrWhiteSpace(point.ImageId)) continue;
+                Tuple<string, PointF> migrated = findSourcePoint(new PointF((float)point.PositionX, (float)point.PositionY));
+                if (migrated == null) continue;
+                point.ImageId = migrated.Item1;
+                point.PositionX = migrated.Item2.X;
+                point.PositionY = migrated.Item2.Y;
+            }
+
             foreach (MarkingItem item in markings.Where(x => string.IsNullOrWhiteSpace(x.ImageId)))
             {
                 Tuple<string, PointF> migrated = findSourcePoint(item.Position);

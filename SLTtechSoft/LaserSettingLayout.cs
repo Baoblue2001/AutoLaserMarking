@@ -1811,7 +1811,7 @@ namespace SLTtechSoft
             float imageY = imagePoint.Y / imageZoom;
 
             // Smaller per-notch increments make the zoom feel smoother.
-            float zoomFactor = (float)Math.Pow(1.012, wheelDelta);
+            float zoomFactor = (float)Math.Pow(1.0005, wheelDelta);
             float newZoom = Math.Max(0.05f, Math.Min(12f, imageZoom * zoomFactor));
             if (Math.Abs(newZoom - imageZoom) < 0.00001f) return;
 

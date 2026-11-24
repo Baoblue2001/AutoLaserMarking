@@ -31,6 +31,12 @@ namespace SLTtechSoft
         public static string MarkingCompleteConfirm = "MarkingCompleteConfirm";
         public static string StartMarkingProcess = "StartMarkingProcess";
         public static string MarkingOneDone = "MarkingOneDone";
+        public static string Require_CheckFiducial = "Require_CheckFiducial";
+        public static string StartCheckFiducial = "StartCheckFiducial";
+        public static string Require_CheckCode = "Require_CheckCode";
+        public static string StartCheckCode = "StartCheckCode";
+        public static string ScanImageTop = "ScanImageTop";
+        public static string ScanImageBottom = "ScanImageBottom";
         /// <summary>
         /// WORD 
         /// </summary>
@@ -44,12 +50,24 @@ namespace SLTtechSoft
         public static string MarkingStart = "MarkingStart";
         public static string Restart_Marking = "Restart_Marking";
         public static string MarkingComplete = "MarkingComplete";
+        public static string CheckFiducialOneDone = "CheckFiducialOneDone";
+        public static string CheckFiducialALLDone = "CheckFiducialALLDone";
+        public static string ResultFace_Corrrect = "ResultFace_Corrrect";
+        public static string CheckCodeOneDone = "CheckCodeOneDone";
+        public static string CheckCodeALLDone = "CheckCodeALLDone";
+        public static string Result_Code_Exists = "Result_Code_Exists";
+        public static string ScanImageTopDone = "ScanImageTopDone";
+        public static string ScanImageBottomDone = "ScanImageBottomDone";
         /// <summary>
         /// Word 
         /// </summary>
         public static string MarkingPosX = "MarkingPosX";
         public static string MarkingPosY = "MarkingPosY";
-        
+        public static string CheckFiducial_PosX = "CheckFiducial_PosX";
+        public static string CheckFiducial_PosY = "CheckFiducial_PosY";
+        public static string CheckCode_PosX = "CheckCode_PosX";
+        public static string CheckCode_PosY = "CheckCode_PosY";
+
     }
 
 

@@ -19,7 +19,7 @@ namespace SLTtechSoft
         public event EventHandler SaveAllRequested;
         public event Action<Action<Bitmap, int, int>> ScanImageRequested;
 
-        private enum LaserSurface
+        public enum LaserSurface
         {
             Top,
             Bot
@@ -252,7 +252,7 @@ namespace SLTtechSoft
             ConfigurePanMenu();
             positionX.Maximum = 1000000;
             positionY.Maximum = 1000000;
-            resolutionValue.TextChanged += ResolutionValueTextChanged;
+            //resolutionValue.TextChanged += ResolutionValueTextChanged;
         }
 
         private void ConfigurePanMenu()
@@ -550,11 +550,12 @@ namespace SLTtechSoft
         public void SetModelFolderPath(string folderPath)
         {
             modelFolderPath = folderPath ?? "";
+            SaveCurrentSurfaceToMemory();
             RefreshPictureGrid();
         }
 
         //Lấy ảnh
-        private void SwitchSurface(LaserSurface surface)
+        public void SwitchSurface(LaserSurface surface)
         {
             SaveCurrentSurfaceToMemory();
             currentSurface = surface;
@@ -586,7 +587,7 @@ namespace SLTtechSoft
             }
         }
         //load&Save
-        private void SaveCurrentSurfaceToMemory()
+        public void SaveCurrentSurfaceToMemory()
         {
             if (dgvListPictureSub != null && dgvListPictureSub.IsCurrentCellInEditMode)
                 dgvListPictureSub.EndEdit();
@@ -599,7 +600,7 @@ namespace SLTtechSoft
         {
             LaserSurfaceParameter result = new LaserSurfaceParameter
             {
-                ResolutionImage = ParseResolution(resolutionValue.Text, 1f),
+                //ResolutionImage = ParseResolution(resolutionValue.Text, 1f),
                 ImagePixelToMM = ParseResolution(imagePixelToMmValue.Text, 1f),
                 ResolutionImageRobot = ParseResolution(robotResolutionValue.Text, 1f),
                 EnableServoAxisTransform = enableAxisTransform != null && enableAxisTransform.Checked,
@@ -634,7 +635,7 @@ namespace SLTtechSoft
             loadingSurfaceControls = true;
             DeleteAllMarkingClick(this, EventArgs.Empty);
             DeleteAllFiducials();
-            resolutionValue.Text = CurrentParameters.ResolutionImage.ToString("0.########");
+            //resolutionValue.Text = CurrentParameters.ResolutionImage.ToString("0.########");
             imagePixelToMmValue.Text = CurrentParameters.ImagePixelToMM.ToString("0.########");
             robotResolutionValue.Text = CurrentParameters.ResolutionImageRobot.ToString("0.########");
             if (enableAxisTransform != null)
@@ -779,7 +780,7 @@ namespace SLTtechSoft
             });
         }
 
-        private string ResolvePicturePath(LaserScanImageParameter picture)
+        public string ResolvePicturePath(LaserScanImageParameter picture)
         {
             if (picture == null || string.IsNullOrWhiteSpace(picture.ImagePath)) return "";
             if (Path.IsPathRooted(picture.ImagePath)) return picture.ImagePath;
@@ -1121,7 +1122,7 @@ namespace SLTtechSoft
             return false;
         }
 
-        private void MigrateLegacyPointsToImageTiles(bool hadLegacyStitch, double originX, double originY, double oldMmPerPixel)
+        public void MigrateLegacyPointsToImageTiles(bool hadLegacyStitch, double originX, double originY, double oldMmPerPixel)
         {
             if (imageTiles.Count == 0) return;
             double mmPerPixel = Math.Max(0.0000001, CurrentParameters.ImagePixelToMM);
@@ -1294,7 +1295,7 @@ namespace SLTtechSoft
             UpdateAllFiducialViews();
         }
 
-        private void RebuildSurfaceImage(LaserSurface surface, bool clearWhenNoPictures = false)
+        public void RebuildSurfaceImage(LaserSurface surface, bool clearWhenNoPictures = false)
         {
             LaserSurfaceParameter parameters = surface == LaserSurface.Top ? topParameters : botParameters;
             bool hadLegacyStitch = parameters.HasStitchCoordinateSystem && parameters.StitchPixelToMM > 0;
@@ -1544,7 +1545,7 @@ namespace SLTtechSoft
         }
 
 
-        private void ScanImageClick(object sender, EventArgs e)
+        public void ScanImageClick(object sender, EventArgs e)
         {
             if (string.IsNullOrWhiteSpace(modelFolderPath) || !Directory.Exists(modelFolderPath))
             {
@@ -2314,7 +2315,7 @@ namespace SLTtechSoft
             return new PointF((float)x, (float)y);
         }
 
-        private static PointF GetServoImageMachinePoint(
+        public static PointF GetServoImageMachinePoint(
             LaserSurfaceParameter parameters, LaserScanImageParameter picture,
             int imageWidth, int imageHeight, double mmPerPixel, double sourceX, double sourceY)
         {
@@ -2325,7 +2326,7 @@ namespace SLTtechSoft
             return new PointF(center.X + offset.X, center.Y + offset.Y);
         }
 
-        private static PointF MachineToStitchPixel(
+        public static PointF MachineToStitchPixel(
             double machineX, double machineY, double minX, double maxY,
             double pixelsPerMM, float margin)
         {
@@ -2520,18 +2521,11 @@ namespace SLTtechSoft
                 UpdateFiducialRow(item);
         }
 
-        private float Resolution
-        {
-            get
-            {
-                float value;
-                return float.TryParse(resolutionValue.Text, out value) && value > 0 ? value : 1f;
-            }
-        }
+       
 
         private float ImagePixelToMM
         {
-            get { return ParseResolution(imagePixelToMmValue.Text, Resolution); }
+            get { return ParseResolution(imagePixelToMmValue.Text, 1f); }
         }
 
         private float ToMillimeter(float pixel) { return pixel * ImagePixelToMM; }

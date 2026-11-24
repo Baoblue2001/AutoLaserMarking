@@ -572,11 +572,20 @@ namespace SLTtechSoft
                 refreshingAxisControls = false;
             }
             foreach (LaserMarkingParameter marking in CurrentParameters.Markings ?? new List<LaserMarkingParameter>())
-                AddMarking(marking.Type, new PointF((float)marking.PositionX, (float)marking.PositionY), marking.Id, marking.Product, marking.PrintType, marking.Content,marking.Rotate);
+            {
+                PointF storedPosition = new PointF((float)marking.PositionX, (float)marking.PositionY);
+                PointF displayPosition = string.IsNullOrWhiteSpace(marking.ImageId) ? storedPosition : SourceToCanvas(marking.ImageId, storedPosition);
+                AddMarking(marking.Type, displayPosition, marking.Id, marking.Product, marking.PrintType, marking.Content,
+                    marking.Rotate, marking.ImageId, storedPosition);
+            }
             NormalizeMarkingOrder();
             RebuildMarkingList();
             foreach (LaserFiducialParameter point in CurrentParameters.Fiducials ?? new List<LaserFiducialParameter>())
-                AddFiducial(new PointF((float)point.PositionX, (float)point.PositionY), point.Id);
+            {
+                PointF storedPosition = new PointF((float)point.PositionX, (float)point.PositionY);
+                PointF displayPosition = string.IsNullOrWhiteSpace(point.ImageId) ? storedPosition : SourceToCanvas(point.ImageId, storedPosition);
+                AddFiducial(displayPosition, point.Id, point.ImageId, storedPosition);
+            }
             RefreshPictureGrid();
             loadingSurfaceControls = false;
         }
@@ -1163,37 +1172,87 @@ namespace SLTtechSoft
 
             Point clientPoint = imageViewport.PointToClient(new Point(e.X, e.Y));
             PointF imagePoint;
-            if (!TryGetImagePoint(clientPoint, out imagePoint)) return;
-            string Rotate =   GetMarkingRotation(type).ToString().Replace("f","");
-            AddMarking(type, imagePoint, Rotate);
+            string imageId;
+            PointF localPoint;
+            if (!TryGetImageTilePoint(clientPoint, out imagePoint, out imageId, out localPoint)) return;
+            string Rotate = GetMarkingRotation(type).ToString().Replace("f", "");
+            AddMarking(type, imagePoint, Rotate, imageId, localPoint);
         }
 
         private bool TryGetImagePoint(Point viewportPoint, out PointF imagePoint)
         {
-            imagePoint = PointF.Empty;
+            string imageId;
+            PointF localPoint;
+            return TryGetImageTilePoint(viewportPoint, out imagePoint, out imageId, out localPoint);
+        }
+
+        private bool TryGetImageTilePoint(Point viewportPoint, out PointF canvasPoint, out string imageId, out PointF localPoint)
+        {
+            canvasPoint = PointF.Empty;
+            imageId = "";
+            localPoint = PointF.Empty;
             if (markingImage.Image == null || markingImage.Width <= 0 || markingImage.Height <= 0) return false;
+
             Point point = markingImage.PointToClient(imageViewport.PointToScreen(viewportPoint));
             if (point.X < 0 || point.Y < 0 || point.X > markingImage.Width || point.Y > markingImage.Height) return false;
-            imagePoint = new PointF(point.X / imageZoom, point.Y / imageZoom);
-            imagePoint.X = Math.Max(0, Math.Min(markingImage.Image.Width, imagePoint.X));
-            imagePoint.Y = Math.Max(0, Math.Min(markingImage.Image.Height, imagePoint.Y));
+            canvasPoint = new PointF(point.X / imageZoom, point.Y / imageZoom);
+
+            ImageTileInfo tile = imageTiles.FirstOrDefault(x => x.DisplayBounds.Contains(canvasPoint));
+            if (tile == null) return false;
+
+            imageId = tile.ImageId;
+            localPoint = new PointF(
+                (canvasPoint.X - tile.DisplayBounds.X) / tile.Scale,
+                (canvasPoint.Y - tile.DisplayBounds.Y) / tile.Scale);
+            localPoint.X = Math.Max(0, Math.Min(tile.SourceWidth, localPoint.X));
+            localPoint.Y = Math.Max(0, Math.Min(tile.SourceHeight, localPoint.Y));
             return true;
+        }
+
+        private ImageTileInfo FindImageTile(string imageId)
+        {
+            if (string.IsNullOrWhiteSpace(imageId)) return null;
+            return imageTiles.FirstOrDefault(x => string.Equals(x.ImageId, imageId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private PointF SourceToCanvas(string imageId, PointF sourcePoint)
+        {
+            ImageTileInfo tile = FindImageTile(imageId);
+            if (tile == null) return sourcePoint;
+            return new PointF(tile.DisplayBounds.X + sourcePoint.X * tile.Scale,
+                              tile.DisplayBounds.Y + sourcePoint.Y * tile.Scale);
+        }
+
+        private PointF CanvasToSource(string imageId, PointF canvasPoint)
+        {
+            ImageTileInfo tile = FindImageTile(imageId);
+            if (tile == null || tile.Scale <= 0) return canvasPoint;
+            return new PointF((canvasPoint.X - tile.DisplayBounds.X) / tile.Scale,
+                              (canvasPoint.Y - tile.DisplayBounds.Y) / tile.Scale);
         }
         //Thêm Label laser
 
-        private void AddMarking(string type, PointF position,string Rotate)
+        private void AddMarking(string type, PointF position, string Rotate, string imageId, PointF localPosition)
         {
             string normalizedType = NormalizeMarkingType(type);
-            AddMarking(normalizedType, position, nextMarkingId++, "0", normalizedType, "", Rotate);
+            AddMarking(normalizedType, position, nextMarkingId++, "0", normalizedType, "", Rotate, imageId, localPosition);
         }
 
         private void AddMarking(string type, PointF position, int id, string product, string printType, string content, string Rotate)
+        {
+            AddMarking(type, position, id, product, printType, content, Rotate, "", position);
+        }
+
+        private void AddMarking(string type, PointF position, int id, string product, string printType, string content, string Rotate, string imageId, PointF localPosition)
         {
             type = NormalizeMarkingType(type);
             printType = NormalizeMarkingType(string.IsNullOrWhiteSpace(printType) ? type : printType);
             MarkingItem item = new MarkingItem
             {
                 Id = id,
+                ImageId = imageId ?? "",
+                LocalPosition = localPosition,
+                Position = string.IsNullOrWhiteSpace(imageId) ? position : SourceToCanvas(imageId, localPosition),
                 Product = product ?? "0",
                 Type = type,
                 PrintType = printType,
@@ -1203,7 +1262,7 @@ namespace SLTtechSoft
             };
             nextMarkingId = Math.Max(nextMarkingId, id + 1);
             markings.Add(item);
-            PointF machinePosition = GetMarkingCoordinates(position);
+            PointF machinePosition = GetMarkingCoordinates(item);
             int row = markingList.Rows.Add(GetMarkingNumber(item), item.Product, item.Type,
                 FormatCoordinate(machinePosition.X), FormatCoordinate(machinePosition.Y));
             markingList.Rows[row].Tag = item;
@@ -2040,9 +2099,11 @@ namespace SLTtechSoft
 
             Point viewportPoint = imageViewport.PointToClient(((Control)sender).PointToScreen(e.Location));
             PointF imagePoint;
-            if (!TryGetImagePoint(viewportPoint, out imagePoint)) return;
+            string imageId;
+            PointF localPoint;
+            if (!TryGetImageTilePoint(viewportPoint, out imagePoint, out imageId, out localPoint)) return;
 
-            AddFiducial(imagePoint, nextFiducialId++);
+            AddFiducial(imagePoint, nextFiducialId++, imageId, localPoint);
             addingFiducial = false;
             addFiducial.Text = "Add";
             addFiducial.BackColor = SystemColors.Control;
@@ -2052,10 +2113,21 @@ namespace SLTtechSoft
 
         private void AddFiducial(PointF position, int id)
         {
+            AddFiducial(position, id, "", position);
+        }
+
+        private void AddFiducial(PointF position, int id, string imageId, PointF localPosition)
+        {
             nextFiducialId = Math.Max(nextFiducialId, id + 1);
-            FiducialItem item = new FiducialItem { Id = id, Position = position };
+            FiducialItem item = new FiducialItem
+            {
+                Id = id,
+                ImageId = imageId ?? "",
+                LocalPosition = localPosition,
+                Position = string.IsNullOrWhiteSpace(imageId) ? position : SourceToCanvas(imageId, localPosition)
+            };
             fiducials.Add(item);
-            PointF servoPosition = GetFiducialCoordinates(position);
+            PointF servoPosition = GetFiducialCoordinates(item);
             int row = fiducialList.Rows.Add(item.Id.ToString(), FormatCoordinate(servoPosition.X), FormatCoordinate(servoPosition.Y));
             fiducialList.Rows[row].Tag = item;
             item.View = new FiducialLabel { AutoSize = false, Size = new Size(48, 24), Text = "F" + item.Id, Font = new Font(Font.FontFamily, 9f, FontStyle.Bold), ForeColor = Color.Red, BackColor = Color.Transparent, Tag = item, Cursor = Cursors.Hand };

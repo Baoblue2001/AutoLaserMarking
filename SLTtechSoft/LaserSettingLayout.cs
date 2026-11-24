@@ -941,7 +941,7 @@ namespace SLTtechSoft
                         // ImagePixelToMM is the only scale: millimetres represented by one source pixel.
                         // The optional transform is applied before calculating the physical layout.
                         double mmPerPixel = parameters.ImagePixelToMM > 0 ? parameters.ImagePixelToMM : 1.0;
-                        Func<LaserScanImageParameter, PointF> getPosition = picture =>
+                        Func<LaserScanImageParameter, Tuple<double, double>> getPosition = picture =>
                         {
                             double x = picture.ServoX.Value;
                             double y = picture.ServoY.Value;

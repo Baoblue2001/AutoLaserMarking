@@ -1131,11 +1131,16 @@ namespace SLTtechSoft
                 return;
 
             bool changed = false;
+            bool allReferencedTilesAvailable = true;
             foreach (LaserMarkingParameter marking in CurrentParameters.Markings ?? new List<LaserMarkingParameter>())
             {
                 if (string.IsNullOrWhiteSpace(marking.ImageId)) continue;
                 ImageTileInfo tile = FindImageTile(marking.ImageId);
-                if (tile == null) continue;
+                if (tile == null)
+                {
+                    allReferencedTilesAvailable = false;
+                    continue;
+                }
 
                 // The buggy mapping inverted full-image edge vectors, so saved local points
                 // from that build are normalized fractions instead of source pixels.
@@ -1151,7 +1156,11 @@ namespace SLTtechSoft
             {
                 if (string.IsNullOrWhiteSpace(point.ImageId)) continue;
                 ImageTileInfo tile = FindImageTile(point.ImageId);
-                if (tile == null) continue;
+                if (tile == null)
+                {
+                    allReferencedTilesAvailable = false;
+                    continue;
+                }
 
                 if (Math.Abs(point.PositionX) <= 1.001 && Math.Abs(point.PositionY) <= 1.001)
                 {
@@ -1161,7 +1170,8 @@ namespace SLTtechSoft
                 }
             }
 
-            CurrentParameters.ImageLocalCoordinateVersion = 1;
+            if (allReferencedTilesAvailable)
+                CurrentParameters.ImageLocalCoordinateVersion = 1;
             if (changed)
             {
                 if (currentSurface == LaserSurface.Top) topParameters = CurrentParameters;

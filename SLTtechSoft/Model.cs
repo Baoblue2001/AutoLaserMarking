@@ -295,6 +295,7 @@ namespace SLTtechSoft
 
                 Directory.CreateDirectory(modelFolder);
                 CopyVisionFilesToModelFolder(newModel, sourceFile, modelFolder);
+                CopyLaserPicturesToModelFolder(newModel, sourceFile, modelFolder);
                 File.WriteAllText(modelFile, JsonConvert.SerializeObject(newModel));
 
                 int row = modelTable.Table.Rows.Add(modelTable.Table.Rows.Count, modelName, modelFile);
@@ -304,6 +305,7 @@ namespace SLTtechSoft
                 currentModelInfomation.ModelNo = row;
                 currentModelInfomation.PathFileModel = modelFile;
                 modelParameter = newModel;
+                laserSettingLayout.SetModelFolderPath(modelFolder);
                 ShowAModelParameter(newModel);
                 SaveCurrentModelInfomation(true);
                 MessageBox.Show("New model copied successfully.", "Create Model", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -312,6 +314,74 @@ namespace SLTtechSoft
             {
                 MessageBox.Show(ex.ToString(), "Create Model Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private void CopyLaserPicturesToModelFolder(ModelParameter model, string sourceModelFile, string targetFolder)
+        {
+            if (model == null || model.Cam == null) return;
+
+            string sourceFolder = Path.GetDirectoryName(Path.GetFullPath(sourceModelFile));
+            Dictionary<string, string> copiedFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            for (int camIndex = 0; camIndex < model.Cam.Length; camIndex++)
+            {
+                CamPara camera = model.Cam[camIndex];
+                if (camera == null) continue;
+
+                CopyLaserSurfacePictures(camera.Top, "TOP", sourceFolder, targetFolder, copiedFiles);
+                CopyLaserSurfacePictures(camera.Bot, "BOT", sourceFolder, targetFolder, copiedFiles);
+
+                camera.LaserTopImageFile = CopyLaserImageReference(
+                    camera.LaserTopImageFile, "TOP", sourceFolder, targetFolder, copiedFiles);
+                camera.LaserBotImageFile = CopyLaserImageReference(
+                    camera.LaserBotImageFile, "BOT", sourceFolder, targetFolder, copiedFiles);
+                camera.LaserImageFile = camera.LaserTopImageFile;
+            }
+        }
+
+        private void CopyLaserSurfacePictures(
+            LaserSurfaceParameter surface, string surfaceName, string sourceFolder,
+            string targetFolder, Dictionary<string, string> copiedFiles)
+        {
+            if (surface == null || surface.ScanImages == null) return;
+
+            for (int i = 0; i < surface.ScanImages.Count; i++)
+            {
+                LaserScanImageParameter picture = surface.ScanImages[i];
+                if (picture == null) continue;
+
+                string copiedRelativePath = CopyLaserImageReference(
+                    picture.ImagePath, surfaceName, sourceFolder, targetFolder, copiedFiles);
+                picture.ImagePath = copiedRelativePath;
+            }
+        }
+
+        private string CopyLaserImageReference(
+            string imageReference, string surfaceName, string sourceFolder,
+            string targetFolder, Dictionary<string, string> copiedFiles)
+        {
+            if (string.IsNullOrWhiteSpace(imageReference)) return "";
+
+            string sourcePath = Path.IsPathRooted(imageReference)
+                ? imageReference
+                : Path.Combine(sourceFolder, imageReference);
+            sourcePath = Path.GetFullPath(sourcePath);
+            if (!File.Exists(sourcePath)) return "";
+
+            string targetPath;
+            if (!copiedFiles.TryGetValue(sourcePath, out targetPath))
+            {
+                string destinationFolder = Path.Combine(targetFolder, "LaserPictures", surfaceName);
+                Directory.CreateDirectory(destinationFolder);
+                string extension = Path.GetExtension(sourcePath);
+                string fileName = Path.GetFileNameWithoutExtension(sourcePath) + "_" +
+                    Guid.NewGuid().ToString("N").Substring(0, 8) + extension;
+                targetPath = Path.Combine(destinationFolder, fileName);
+                File.Copy(sourcePath, targetPath, false);
+                copiedFiles.Add(sourcePath, targetPath);
+            }
+
+            return Path.Combine("LaserPictures", surfaceName, Path.GetFileName(targetPath));
         }
 
         private void CopyVisionFilesToModelFolder(ModelParameter model, string sourceModelFile, string targetFolder)
@@ -533,8 +603,9 @@ namespace SLTtechSoft
             if (result == DialogResult.Yes)
             {
                 currentModelInfomation.PathFileModel = "";
-               
                 modelParameter = new ModelParameter();
+                laserSettingLayout.SetModelFolderPath("");
+                ShowAModelParameter(modelParameter);
                 
             }
             //LOG

@@ -740,7 +740,21 @@ namespace SLTtechSoft
             else picture.ServoY = coordinate;
 
             SaveCurrentSurfaceToMemory();
+            RebindPictureGridTags();
             RebuildSurfaceImage(currentSurface);
+        }
+
+        private void RebindPictureGridTags()
+        {
+            List<LaserScanImageParameter> pictures = CurrentParameters.ScanImages ??
+                new List<LaserScanImageParameter>();
+            int count = Math.Min(dgvListPictureSub.Rows.Count, pictures.Count);
+            for (int i = 0; i < count; i++)
+            {
+                dgvListPictureSub.Rows[i].Tag = pictures[i];
+                dgvListPictureSub.Rows[i].Cells["colPicturePath"].ToolTipText =
+                    ResolvePicturePath(pictures[i]);
+            }
         }
 
         private void RebuildSurfaceImage(LaserSurface surface)
@@ -915,7 +929,11 @@ namespace SLTtechSoft
 
         private void SaveCurrentSurfaceToMemoryIfSelected(LaserSurface surface)
         {
-            if (currentSurface == surface) SaveCurrentSurfaceToMemory();
+            if (currentSurface == surface)
+            {
+                SaveCurrentSurfaceToMemory();
+                RebindPictureGridTags();
+            }
         }
 
         private void SaveOneSnapshotForSurface(LaserSurface surface)

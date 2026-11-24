@@ -2821,7 +2821,16 @@ namespace SLTtechSoft
                 UpdateFiducialView(item);
                 UpdateFiducialRow(item);
             };
-            up = (s, args) => { item.View.Capture = false; item.View.MouseMove -= move; item.View.MouseUp -= up; };
+            up = (s, args) =>
+            {
+                item.View.Capture = false;
+                item.View.MouseMove -= move;
+                item.View.MouseUp -= up;
+                UpdateFiducialImageBinding(item);
+                UpdateFiducialView(item);
+                UpdateFiducialRow(item);
+                SaveCurrentSurfaceToMemory();
+            };
             item.View.MouseMove += move;
             item.View.MouseUp += up;
         }

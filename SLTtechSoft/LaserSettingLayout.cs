@@ -685,7 +685,7 @@ namespace SLTtechSoft
 
             SaveCurrentSurfaceToMemory();
             RefreshPictureGrid();
-            RebuildSurfaceImage(currentSurface);
+            RebuildSurfaceImage(currentSurface, CurrentParameters.ScanImages.Count == 0);
         }
 
         private void DeleteModelPictureFile(LaserScanImageParameter picture)
@@ -762,7 +762,7 @@ namespace SLTtechSoft
             }
         }
 
-        private void RebuildSurfaceImage(LaserSurface surface)
+        private void RebuildSurfaceImage(LaserSurface surface, bool clearWhenNoPictures = false)
         {
             LaserSurfaceParameter parameters = surface == LaserSurface.Top ? topParameters : botParameters;
             List<Tuple<LaserScanImageParameter, Bitmap>> loaded = new List<Tuple<LaserScanImageParameter, Bitmap>>();
@@ -786,7 +786,14 @@ namespace SLTtechSoft
                 string outputPath = "";
                 if (positioned.Count == 0)
                 {
-                    if (loaded.Count > 0) outputPath = ResolvePicturePath(loaded[0].Item1);
+                    if (loaded.Count > 0)
+                        outputPath = ResolvePicturePath(loaded[0].Item1);
+                    else if (clearWhenNoPictures)
+                        outputPath = "";
+                    else if (parameters.ScanImages != null && parameters.ScanImages.Count > 0)
+                        outputPath = "";
+                    else
+                        outputPath = surface == LaserSurface.Top ? topImageFileName : botImageFileName;
                 }
                 else if (!string.IsNullOrWhiteSpace(modelFolderPath))
                 {

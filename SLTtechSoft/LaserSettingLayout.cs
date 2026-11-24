@@ -215,6 +215,7 @@ namespace SLTtechSoft
         private string botImageFileName = "";
         private string modelFolderPath = "";
         private bool refreshingPictureGrid;
+        private bool updatingPictureCoordinates;
         private bool picturePreviewActive;
         private bool refreshingAxisControls;
         private bool loadingSurfaceControls;
@@ -441,6 +442,7 @@ namespace SLTtechSoft
             dgvListPictureSub.CellDoubleClick += PictureGridCellDoubleClick;
             dgvListPictureSub.MouseLeave += PictureGridMouseLeave;
             dgvListPictureSub.CellValueChanged += PictureGridCellValueChanged;
+            dgvListPictureSub.CellEndEdit += PictureGridCellEndEdit;
             dgvListPictureSub.DataError += (s, e) => { e.ThrowException = false; };
             btnAddPicture.Click += AddPicturesClick;
             btnDeletePic.Click += DeleteSelectedPicturesClick;
@@ -949,41 +951,111 @@ namespace SLTtechSoft
 
         private void PictureGridCellValueChanged(object sender, DataGridViewCellEventArgs e)
         {
-            if (refreshingPictureGrid || e.RowIndex < 0 || e.ColumnIndex < 0) return;
+            ApplyPictureGridCoordinateEdit(e);
+        }
+
+        private void PictureGridCellEndEdit(object sender, DataGridViewCellEventArgs e)
+        {
+            // CellEndEdit is the reliable finalization point for TextBox cells.
+            // CellValueChanged may already have handled the edit; the update method
+            // compares both coordinates and skips duplicate rebuilds.
+            ApplyPictureGridCoordinateEdit(e);
+        }
+
+        private bool TryParseOptionalServoCoordinate(object value, out double? coordinate)
+        {
+            coordinate = null;
+            string raw = Convert.ToString(value);
+            if (string.IsNullOrWhiteSpace(raw)) return true;
+
+            double parsed;
+            bool valid = double.TryParse(raw.Trim(), NumberStyles.Float,
+                CultureInfo.CurrentCulture, out parsed) ||
+                double.TryParse(raw.Trim(), NumberStyles.Float,
+                CultureInfo.InvariantCulture, out parsed);
+
+            if (!valid || double.IsNaN(parsed) || double.IsInfinity(parsed))
+                return false;
+
+            coordinate = parsed;
+            return true;
+        }
+
+        private bool SameServoCoordinate(double? left, double? right)
+        {
+            if (!left.HasValue || !right.HasValue)
+                return left.HasValue == right.HasValue;
+            return Math.Abs(left.Value - right.Value) < 0.0000001;
+        }
+
+        private void ApplyPictureGridCoordinateEdit(DataGridViewCellEventArgs e)
+        {
+            if (refreshingPictureGrid || updatingPictureCoordinates ||
+                e.RowIndex < 0 || e.ColumnIndex < 0 ||
+                e.RowIndex >= dgvListPictureSub.Rows.Count)
+                return;
+
             string columnName = dgvListPictureSub.Columns[e.ColumnIndex].Name;
-            if (columnName != "colServoX" && columnName != "colServoY") return;
+            if (columnName != "colServoX" && columnName != "colServoY")
+                return;
 
             DataGridViewRow row = dgvListPictureSub.Rows[e.RowIndex];
-            LaserScanImageParameter picture = row.Tag as LaserScanImageParameter;
-            if (picture == null) return;
+            LaserScanImageParameter rowPicture = row.Tag as LaserScanImageParameter;
+            if (rowPicture == null) return;
 
-            double? coordinate;
-            string raw = Convert.ToString(row.Cells[e.ColumnIndex].Value).Trim();
-            if (string.IsNullOrWhiteSpace(raw))
-                coordinate = null;
-            else
+            updatingPictureCoordinates = true;
+            try
             {
-                double parsed;
-                bool valid = double.TryParse(raw, NumberStyles.Float,
-                    CultureInfo.CurrentCulture, out parsed) ||
-                    double.TryParse(raw, NumberStyles.Float,
-                    CultureInfo.InvariantCulture, out parsed);
-                if (!valid || double.IsNaN(parsed) || double.IsInfinity(parsed))
+                // Resolve against the active Model collection instead of trusting a
+                // potentially stale DataGridView Tag after a previous snapshot/rebind.
+                List<LaserScanImageParameter> pictures = CurrentParameters.ScanImages;
+                LaserScanImageParameter picture = null;
+                if (!string.IsNullOrWhiteSpace(rowPicture.Id))
+                    picture = pictures.FirstOrDefault(x => x.Id == rowPicture.Id);
+
+                if (picture == null && e.RowIndex < pictures.Count)
+                    picture = pictures[e.RowIndex];
+
+                if (picture == null) return;
+
+                double? servoX;
+                double? servoY;
+                if (!TryParseOptionalServoCoordinate(row.Cells["colServoX"].Value, out servoX) ||
+                    !TryParseOptionalServoCoordinate(row.Cells["colServoY"].Value, out servoY))
                 {
-                    MessageBox.Show("Please enter a valid coordinate in millimetres, or leave the cell blank.",
+                    MessageBox.Show("Please enter valid Servo X/Y coordinates in millimetres, or leave a cell blank.",
                         "Invalid Coordinate", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     RefreshPictureGrid();
                     return;
                 }
-                coordinate = parsed;
+
+                bool changed = !SameServoCoordinate(picture.ServoX, servoX) ||
+                               !SameServoCoordinate(picture.ServoY, servoY);
+                if (!changed)
+                {
+                    // Keep the row bound to the current Model object even when this was
+                    // the second notification for the same edit.
+                    row.Tag = picture;
+                    return;
+                }
+
+                picture.ServoX = servoX;
+                picture.ServoY = servoY;
+
+                // Capture the changed picture coordinates into the active TOP/BOT
+                // parameter snapshot, then rebuild using that new snapshot.
+                if (currentSurface == LaserSurface.Top)
+                    topParameters = CaptureCurrentSurface();
+                else
+                    botParameters = CaptureCurrentSurface();
+
+                RebindPictureGridTags();
+                RebuildSurfaceImage(currentSurface);
             }
-
-            if (columnName == "colServoX") picture.ServoX = coordinate;
-            else picture.ServoY = coordinate;
-
-            SaveCurrentSurfaceToMemory();
-            RebindPictureGridTags();
-            RebuildSurfaceImage(currentSurface);
+            finally
+            {
+                updatingPictureCoordinates = false;
+            }
         }
 
         private void RebindPictureGridTags()

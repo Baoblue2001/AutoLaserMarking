@@ -281,7 +281,8 @@ namespace SLTtechSoft
 
         private void ConfigureImageViewport()
         {
-            imageViewport.AutoScroll = true;
+            // Zoom and pan are handled by imagePan/imageZoom only. Native AutoScroll must stay disabled.
+            imageViewport.AutoScroll = false;
             imageViewport.Dock = DockStyle.Fill;
             imageViewport.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             markingImage.Dock = DockStyle.None;
@@ -1510,8 +1511,8 @@ namespace SLTtechSoft
             int deltaY = current.Y - panStart.Y;
             if (deltaX == 0 && deltaY == 0) return;
 
-            Point scroll = imageViewport.AutoScrollPosition;
-           imageViewport.AutoScrollPosition = new Point(-scroll.X - deltaX, -scroll.Y - deltaY);
+            imagePan = new Point(imagePan.X + deltaX, imagePan.Y + deltaY);
+            UpdateImageTransform();
             panStart = current;
         }
 
@@ -2310,13 +2311,13 @@ namespace SLTtechSoft
             imageZoom = newZoom;
             UpdateImageTransform();
 
-            int targetX = (int)Math.Round(markingImage.Left + imageX * imageZoom - viewportPoint.X);
-            int targetY = (int)Math.Round(markingImage.Top + imageY * imageZoom - viewportPoint.Y);
-            int maxX = Math.Max(0, markingImage.Left + markingImage.Width - imageViewport.ClientSize.Width);
-            int maxY = Math.Max(0, markingImage.Top + markingImage.Height - imageViewport.ClientSize.Height);
-            targetX = Math.Max(0, Math.Min(maxX, targetX));
-            targetY = Math.Max(0, Math.Min(maxY, targetY));
-            imageViewport.AutoScrollPosition = new Point(targetX, targetY);
+            // Keep the image pixel under the cursor at exactly the same viewport position.
+            int baseLeft = (imageViewport.ClientSize.Width - markingImage.Width) / 2;
+            int baseTop = (imageViewport.ClientSize.Height - markingImage.Height) / 2;
+            imagePan = new Point(
+                (int)Math.Round(viewportPoint.X - imageX * imageZoom - baseLeft),
+                (int)Math.Round(viewportPoint.Y - imageY * imageZoom - baseTop));
+            UpdateImageTransform();
         }
 
         private void MarkingImageMouseDown(object sender, MouseEventArgs e)
@@ -2359,9 +2360,8 @@ namespace SLTtechSoft
                 return;
             }
 
-            imageViewport.AutoScrollPosition = Point.Empty;
-            int viewportWidth = Math.Max(1, imageViewport.ClientSize.Width - SystemInformation.VerticalScrollBarWidth);
-            int viewportHeight = Math.Max(1, imageViewport.ClientSize.Height - SystemInformation.HorizontalScrollBarHeight);
+            int viewportWidth = Math.Max(1, imageViewport.ClientSize.Width);
+            int viewportHeight = Math.Max(1, imageViewport.ClientSize.Height);
             imageZoom = Math.Min((float)viewportWidth / markingImage.Image.Width, (float)viewportHeight / markingImage.Image.Height);
             imageZoom = Math.Max(0.05f, Math.Min(12f, imageZoom));
             targetZoom = imageZoom;
@@ -2373,7 +2373,8 @@ namespace SLTtechSoft
         {
             if (markingImage.Image == null)
             {
-                imageViewport.AutoScrollMinSize = Size.Empty;
+                markingImage.Location = Point.Empty;
+                imageViewport.Invalidate();
                 UpdateZoomLabel();
                 return;
             }
@@ -2383,11 +2384,10 @@ namespace SLTtechSoft
             markingImage.Height = Math.Max(100, (int)(markingImage.Image.Height * imageZoom));
             int viewportWidth = imageViewport.ClientSize.Width;
             int viewportHeight = imageViewport.ClientSize.Height;
-            markingImage.Left = markingImage.Width < viewportWidth ? (viewportWidth - markingImage.Width) / 2 : 0;
-            markingImage.Top = markingImage.Height < viewportHeight ? (viewportHeight - markingImage.Height) / 2 : 0;
-            imageViewport.AutoScrollMinSize = new Size(
-                Math.Max(viewportWidth, markingImage.Left + markingImage.Width),
-                Math.Max(viewportHeight, markingImage.Top + markingImage.Height));
+            int centeredLeft = (viewportWidth - markingImage.Width) / 2;
+            int centeredTop = (viewportHeight - markingImage.Height) / 2;
+            markingImage.Left = centeredLeft + imagePan.X;
+            markingImage.Top = centeredTop + imagePan.Y;
             UpdateAllMarkingViews();
             UpdateZoomLabel();
         }

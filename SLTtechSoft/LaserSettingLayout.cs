@@ -1088,7 +1088,14 @@ namespace SLTtechSoft
                     item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
 
             foreach (FiducialItem item in fiducials)
-                if (!string.IsNullOrWhiteSpace(item.ImageId) && FindImageT        private void RebuildSurfaceImage(LaserSurface surface, bool clearWhenNoPictures = false)
+                if (!string.IsNullOrWhiteSpace(item.ImageId) && FindImageTile(item.ImageId) != null)
+                    item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+
+            UpdateAllMarkingViews();
+            UpdateAllFiducialViews();
+        }
+
+        private void RebuildSurfaceImage(LaserSurface surface, bool clearWhenNoPictures = false)
         {
             LaserSurfaceParameter parameters = surface == LaserSurface.Top ? topParameters : botParameters;
             bool hadLegacyStitch = parameters.HasStitchCoordinateSystem && parameters.StitchPixelToMM > 0;
@@ -1328,13 +1335,6 @@ namespace SLTtechSoft
             }
         }
 
- Stitching", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
-            finally
-            {
-                foreach (var item in loaded) item.Item2.Dispose();
-            }
-        }
 
         private void ScanImageClick(object sender, EventArgs e)
         {

@@ -176,6 +176,7 @@ namespace SLTtechSoft
         private string modelFolderPath = "";
         private bool refreshingPictureGrid;
         private bool refreshingAxisControls;
+        private bool loadingSurfaceControls;
         private CheckBox enableAxisTransform;
         private CheckBox swapServoAxes;
         private CheckBox reverseServoX;
@@ -510,6 +511,7 @@ namespace SLTtechSoft
 
         private void LoadCurrentSurfaceToControls()
         {
+            loadingSurfaceControls = true;
             DeleteAllMarkingClick(this, EventArgs.Empty);
             DeleteAllFiducials();
             resolutionValue.Text = CurrentParameters.ResolutionImage.ToString("0.########");
@@ -534,6 +536,7 @@ namespace SLTtechSoft
             foreach (LaserFiducialParameter point in CurrentParameters.Fiducials ?? new List<LaserFiducialParameter>())
                 AddFiducial(new PointF((float)point.PositionX, (float)point.PositionY), point.Id);
             RefreshPictureGrid();
+            loadingSurfaceControls = false;
         }
 
         private void SaveOneClick(object sender, EventArgs e)
@@ -1611,7 +1614,7 @@ namespace SLTtechSoft
             foreach (MarkingItem item in markings) UpdateMarkingRow(item);
             UpdatePositionControls(selectedMarking);
 
-            if (ReferenceEquals(sender, imagePixelToMmValue))
+            if (ReferenceEquals(sender, imagePixelToMmValue) && !loadingSurfaceControls)
             {
                 double scale;
                 if (double.TryParse(imagePixelToMmValue.Text, NumberStyles.Float,

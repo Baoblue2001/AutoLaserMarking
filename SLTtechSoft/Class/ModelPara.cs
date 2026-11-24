@@ -32,6 +32,13 @@ namespace SLTtechSoft
         public bool ReverseServoX = false;
         public bool ReverseServoY = false;
 
+        // Physical coordinate represented by the top-left pixel of the current stitched image.
+        // Pixel coordinates are converted using ImagePixelToMM only.
+        public bool HasStitchCoordinateSystem = false;
+        public double StitchOriginX;
+        public double StitchOriginY;
+        public double StitchPixelToMM;
+
         // Each scanned image has its own servo position; image paths are relative to the model folder.
         public List<LaserScanImageParameter> ScanImages = new List<LaserScanImageParameter>();
     }

@@ -323,6 +323,10 @@ namespace SLTtechSoft
             markingList.DefaultCellStyle.SelectionBackColor = Color.LightGreen;
             markingList.DefaultCellStyle.SelectionForeColor = Color.Black;
             markingList.RowsDefaultCellStyle.BackColor = Color.LightGray;
+            markingList.CellEndEdit += MarkingListCellEndEdit;
+            markingList.DataError += (s, e) => { e.ThrowException = false; };
+            fiducialList.CellEndEdit += FiducialListCellEndEdit;
+            fiducialList.DataError += (s, e) => { e.ThrowException = false; };
             positionX.ValueChanged += PositionValueChanged;
             positionY.ValueChanged += PositionValueChanged;
             imagePixelToMmValue.TextChanged += ResolutionValueTextChanged;
@@ -1546,7 +1550,7 @@ namespace SLTtechSoft
         private void PositionValueChanged(object sender, EventArgs e)
         {
             if (updatingPositionControls || selectedMarking == null || !positionX.Focused && !positionY.Focused) return;
-            selectedMarking.Position = new PointF(ToPixel((float)positionX.Value), ToPixel((float)positionY.Value));
+            selectedMarking.Position = MachineToImagePixel((float)positionX.Value, (float)positionY.Value);
             ClampPosition(selectedMarking);
             UpdateMarkingView(selectedMarking);
             UpdateMarkingRow(selectedMarking);
@@ -1558,8 +1562,9 @@ namespace SLTtechSoft
             updatingPositionControls = true;
             try
             {
-                positionX.Value = ClampValue(positionX, ToMillimeter(item.Position.X));
-                positionY.Value = ClampValue(positionY, ToMillimeter(item.Position.Y));
+                PointF machinePosition = GetMarkingCoordinates(item.Position);
+                positionX.Value = ClampValue(positionX, machinePosition.X);
+                positionY.Value = ClampValue(positionY, machinePosition.Y);
                 SelectPrintType(item.PrintType);
                 markingContent.Text = item.Content ?? "";
             }
@@ -1612,9 +1617,9 @@ namespace SLTtechSoft
 
         private static string FormatCoordinate(float value) { return value.ToString("0.00"); }
 
-        // Fiducial coordinates are absolute servo millimetres, derived from the stitched image origin.
-        // The centre of each captured image is placed at that image's ServoX/ServoY during stitching.
-        private PointF GetFiducialCoordinates(PointF imagePixel)
+        // Marking and Fiducial use the same image-to-machine coordinate transform.
+        // For a physically stitched image, the stitch origin is the machine-coordinate origin.
+        private PointF GetMarkingCoordinates(PointF imagePixel)
         {
             LaserSurfaceParameter parameters = CurrentParameters;
             if (parameters.HasStitchCoordinateSystem && parameters.StitchPixelToMM > 0)
@@ -1625,6 +1630,89 @@ namespace SLTtechSoft
             }
 
             return new PointF(ToMillimeter(imagePixel.X), ToMillimeter(imagePixel.Y));
+        }
+
+        private PointF GetFiducialCoordinates(PointF imagePixel)
+        {
+            return GetMarkingCoordinates(imagePixel);
+        }
+
+        private PointF MachineToImagePixel(float machineX, float machineY)
+        {
+            LaserSurfaceParameter parameters = CurrentParameters;
+            if (parameters.HasStitchCoordinateSystem && parameters.StitchPixelToMM > 0)
+            {
+                return new PointF(
+                    (float)((machineX - parameters.StitchOriginX) / parameters.StitchPixelToMM),
+                    (float)((parameters.StitchOriginY - machineY) / parameters.StitchPixelToMM));
+            }
+
+            return new PointF(ToPixel(machineX), ToPixel(machineY));
+        }
+
+        private static bool TryParseCoordinate(object value, out float coordinate)
+        {
+            string text = Convert.ToString(value).Trim();
+            double parsed;
+            bool valid = double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out parsed) ||
+                         double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed);
+            coordinate = valid && !double.IsNaN(parsed) && !double.IsInfinity(parsed) ? (float)parsed : 0f;
+            return valid && !double.IsNaN(parsed) && !double.IsInfinity(parsed) &&
+                   parsed <= float.MaxValue && parsed >= float.MinValue;
+        }
+
+        private void MarkingListCellEndEdit(object sender, DataGridViewCellEventArgs e)
+        {
+            if (loadingSurfaceControls || e.RowIndex < 0 || e.ColumnIndex < 0) return;
+            DataGridViewRow row = markingList.Rows[e.RowIndex];
+            MarkingItem item = row.Tag as MarkingItem;
+            if (item == null) return;
+
+            string column = markingList.Columns[e.ColumnIndex].Name;
+            if (column != "X" && column != "Y") return;
+
+            float value;
+            if (!TryParseCoordinate(row.Cells[e.ColumnIndex].Value, out value))
+            {
+                UpdateMarkingRow(item);
+                return;
+            }
+
+            PointF machine = GetMarkingCoordinates(item.Position);
+            if (column == "X") machine.X = value;
+            else machine.Y = value;
+
+            item.Position = MachineToImagePixel(machine.X, machine.Y);
+            ClampPosition(item);
+            UpdateMarkingView(item);
+            UpdatePositionControls(item);
+            UpdateMarkingRow(item);
+            SaveCurrentSurfaceToMemory();
+        }
+
+        private void FiducialListCellEndEdit(object sender, DataGridViewCellEventArgs e)
+        {
+            if (loadingSurfaceControls || e.RowIndex < 0 || e.ColumnIndex < 1 || e.ColumnIndex > 2) return;
+            DataGridViewRow row = fiducialList.Rows[e.RowIndex];
+            FiducialItem item = row.Tag as FiducialItem;
+            if (item == null) return;
+
+            float value;
+            if (!TryParseCoordinate(row.Cells[e.ColumnIndex].Value, out value))
+            {
+                UpdateFiducialRow(item);
+                return;
+            }
+
+            PointF machine = GetFiducialCoordinates(item.Position);
+            if (e.ColumnIndex == 1) machine.X = value;
+            else machine.Y = value;
+
+            item.Position = MachineToImagePixel(machine.X, machine.Y);
+            ClampFiducial(item);
+            UpdateFiducialView(item);
+            UpdateFiducialRow(item);
+            SaveCurrentSurfaceToMemory();
         }
 
         private void RefreshFiducialRows()
@@ -1761,8 +1849,9 @@ namespace SLTtechSoft
             foreach (DataGridViewRow row in markingList.Rows)
                 if (row.Tag == item)
                 {
-                    row.Cells["X"].Value = FormatCoordinate(ToMillimeter(item.Position.X));
-                    row.Cells["Y"].Value = FormatCoordinate(ToMillimeter(item.Position.Y));
+                    PointF machinePosition = GetMarkingCoordinates(item.Position);
+                    row.Cells["X"].Value = FormatCoordinate(machinePosition.X);
+                    row.Cells["Y"].Value = FormatCoordinate(machinePosition.Y);
                     break;
                 }
         }
@@ -1810,8 +1899,10 @@ namespace SLTtechSoft
             float imageX = imagePoint.X / imageZoom;
             float imageY = imagePoint.Y / imageZoom;
 
-            // Smaller per-notch increments make the zoom feel smoother.
-            float zoomFactor = (float)Math.Pow(1.0005, wheelDelta);
+            // Predictable CAD-style zoom: 20% per wheel notch, anchored under the cursor.
+            int notches = Math.Max(1, Math.Abs(wheelDelta) / 120);
+            float zoomFactor = (float)Math.Pow(1.20, notches);
+            if (wheelDelta < 0) zoomFactor = 1f / zoomFactor;
             float newZoom = Math.Max(0.05f, Math.Min(12f, imageZoom * zoomFactor));
             if (Math.Abs(newZoom - imageZoom) < 0.00001f) return;
 
@@ -2072,7 +2163,9 @@ namespace SLTtechSoft
             markingList.Rows.Clear();
             foreach (MarkingItem item in markings)
             {
-                int row = markingList.Rows.Add(GetMarkingNumber(item),item.Product, item.Type, FormatCoordinate(ToMillimeter(item.Position.X)), FormatCoordinate(ToMillimeter(item.Position.Y)));
+                PointF machinePosition = GetMarkingCoordinates(item.Position);
+                int row = markingList.Rows.Add(GetMarkingNumber(item), item.Product, item.Type,
+                    FormatCoordinate(machinePosition.X), FormatCoordinate(machinePosition.Y));
                 markingList.Rows[row].Tag = item;
             }
         }

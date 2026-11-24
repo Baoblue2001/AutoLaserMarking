@@ -462,6 +462,9 @@ namespace SLTtechSoft
         //load&Save
         private void SaveCurrentSurfaceToMemory()
         {
+            if (dgvListPictureSub != null && dgvListPictureSub.IsCurrentCellInEditMode)
+                dgvListPictureSub.EndEdit();
+
             if (currentSurface == LaserSurface.Top) topParameters = CaptureCurrentSurface();
             else botParameters = CaptureCurrentSurface();
         }
@@ -722,9 +725,9 @@ namespace SLTtechSoft
             else
             {
                 double parsed;
-                bool valid = double.TryParse(raw, NumberStyles.Float | NumberStyles.AllowThousands,
+                bool valid = double.TryParse(raw, NumberStyles.Float,
                     CultureInfo.CurrentCulture, out parsed) ||
-                    double.TryParse(raw, NumberStyles.Float | NumberStyles.AllowThousands,
+                    double.TryParse(raw, NumberStyles.Float,
                     CultureInfo.InvariantCulture, out parsed);
                 if (!valid || double.IsNaN(parsed) || double.IsInfinity(parsed))
                 {

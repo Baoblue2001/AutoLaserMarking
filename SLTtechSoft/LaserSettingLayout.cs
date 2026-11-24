@@ -1026,6 +1026,7 @@ namespace SLTtechSoft
                 return bestTile == null ? null : Tuple.Create(bestTile.ImageId, bestLocal);
             };
 
+            bool migratedAny = false;
             foreach (LaserMarkingParameter marking in CurrentParameters.Markings ?? new List<LaserMarkingParameter>())
             {
                 if (!string.IsNullOrWhiteSpace(marking.ImageId)) continue;
@@ -1034,6 +1035,7 @@ namespace SLTtechSoft
                 marking.ImageId = migrated.Item1;
                 marking.PositionX = migrated.Item2.X;
                 marking.PositionY = migrated.Item2.Y;
+                migratedAny = true;
             }
 
             foreach (LaserFiducialParameter point in CurrentParameters.Fiducials ?? new List<LaserFiducialParameter>())
@@ -1044,6 +1046,7 @@ namespace SLTtechSoft
                 point.ImageId = migrated.Item1;
                 point.PositionX = migrated.Item2.X;
                 point.PositionY = migrated.Item2.Y;
+                migratedAny = true;
             }
 
             foreach (MarkingItem item in markings.Where(x => string.IsNullOrWhiteSpace(x.ImageId)))
@@ -1053,6 +1056,7 @@ namespace SLTtechSoft
                 item.ImageId = migrated.Item1;
                 item.LocalPosition = migrated.Item2;
                 item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+                migratedAny = true;
             }
 
             foreach (FiducialItem item in fiducials.Where(x => string.IsNullOrWhiteSpace(x.ImageId)))
@@ -1062,6 +1066,13 @@ namespace SLTtechSoft
                 item.ImageId = migrated.Item1;
                 item.LocalPosition = migrated.Item2;
                 item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+                migratedAny = true;
+            }
+
+            if (migratedAny)
+            {
+                if (currentSurface == LaserSurface.Top) savedTopParameters = CloneSurface(topParameters);
+                else savedBotParameters = CloneSurface(botParameters);
             }
         }
 

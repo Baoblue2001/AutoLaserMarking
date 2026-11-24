@@ -1169,16 +1169,21 @@ namespace SLTtechSoft
                         }
 
                         const float margin = 20f;
-                        double canvasWidthValue = Math.Ceiling((maxX - minX) / mmPerPixel + margin * 2);
-                        double canvasHeightValue = Math.Ceiling((maxY - minY) / mmPerPixel + margin * 2);
-                        if (canvasWidthValue < 1 || canvasHeightValue < 1 ||
-                            canvasWidthValue > 30000 || canvasHeightValue > 30000 ||
-                            canvasWidthValue * canvasHeightValue > 120000000)
-                            throw new InvalidOperationException(
-                                "The servo-positioned image area is too large to render. Check Servo X/Y and ImagePixelToMM.");
+                        double physicalWidth = Math.Max(0.001, maxX - minX);
+                        double physicalHeight = Math.Max(0.001, maxY - minY);
+                        double rawWidth = physicalWidth / mmPerPixel;
+                        double rawHeight = physicalHeight / mmPerPixel;
 
-                        int canvasWidth = (int)canvasWidthValue;
-                        int canvasHeight = (int)canvasHeightValue;
+                        // Preserve the physical layout while downsampling only the preview when the
+                        // servo span would otherwise create an impractically large bitmap.
+                        double renderScale = Math.Min(1.0, Math.Min(28000.0 / rawWidth, 28000.0 / rawHeight));
+                        double maxAreaScale = Math.Sqrt(100000000.0 / Math.Max(1.0, rawWidth * rawHeight));
+                        renderScale = Math.Min(renderScale, maxAreaScale);
+                        double pixelsPerMM = renderScale / mmPerPixel;
+                        double canvasWidthValue = Math.Ceiling(physicalWidth * pixelsPerMM + margin * 2);
+                        double canvasHeightValue = Math.Ceiling(physicalHeight * pixelsPerMM + margin * 2);
+                        int canvasWidth = Math.Max(1, (int)canvasWidthValue);
+                        int canvasHeight = Math.Max(1, (int)canvasHeightValue);
                         List<ImageTileInfo> newTiles = new List<ImageTileInfo>();
 
                         using (Bitmap canvas = new Bitmap(canvasWidth, canvasHeight, PixelFormat.Format24bppRgb))
@@ -1206,10 +1211,10 @@ namespace SLTtechSoft
                                 PointF bottomRightMachine = GetServoImageMachinePoint(
                                     parameters, picture, image.Width, image.Height, mmPerPixel, image.Width, image.Height);
 
-                                PointF p00 = MachineToStitchPixel(topLeftMachine.X, topLeftMachine.Y, minX, maxY, mmPerPixel, margin);
-                                PointF p10 = MachineToStitchPixel(topRightMachine.X, topRightMachine.Y, minX, maxY, mmPerPixel, margin);
-                                PointF p01 = MachineToStitchPixel(bottomLeftMachine.X, bottomLeftMachine.Y, minX, maxY, mmPerPixel, margin);
-                                PointF p11 = MachineToStitchPixel(bottomRightMachine.X, bottomRightMachine.Y, minX, maxY, mmPerPixel, margin);
+                                PointF p00 = MachineToStitchPixel(topLeftMachine.X, topLeftMachine.Y, minX, maxY, pixelsPerMM, margin);
+                                PointF p10 = MachineToStitchPixel(topRightMachine.X, topRightMachine.Y, minX, maxY, pixelsPerMM, margin);
+                                PointF p01 = MachineToStitchPixel(bottomLeftMachine.X, bottomLeftMachine.Y, minX, maxY, pixelsPerMM, margin);
+                                PointF p11 = MachineToStitchPixel(bottomRightMachine.X, bottomRightMachine.Y, minX, maxY, pixelsPerMM, margin);
 
                                 PointF[] destination = { p00, p10, p01 };
                                 graphics.DrawImage(image, destination);
@@ -1246,7 +1251,7 @@ namespace SLTtechSoft
                         parameters.HasStitchCoordinateSystem = true;
                         parameters.StitchOriginX = minX;
                         parameters.StitchOriginY = maxY;
-                        parameters.StitchPixelToMM = mmPerPixel;
+                        parameters.StitchPixelToMM = 1.0 / pixelsPerMM;
 
                         if (surface == currentSurface)
                         {
@@ -2030,11 +2035,11 @@ namespace SLTtechSoft
 
         private static PointF MachineToStitchPixel(
             double machineX, double machineY, double minX, double maxY,
-            double mmPerPixel, float margin)
+            double pixelsPerMM, float margin)
         {
             return new PointF(
-                (float)(margin + (machineX - minX) / mmPerPixel),
-                (float)(margin + (maxY - machineY) / mmPerPixel));
+                (float)(margin + (machineX - minX) * pixelsPerMM),
+                (float)(margin + (maxY - machineY) * pixelsPerMM));
         }
 
         private PointF InverseTransformServoAxes(double x, double y)

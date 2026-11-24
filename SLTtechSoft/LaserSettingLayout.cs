@@ -193,8 +193,8 @@ namespace SLTtechSoft
         private float imageZoom = 1f;
         private float targetZoom = 1f;
         private Point zoomAnchor;
-        private float zoomAnchorImageX;
-        private float zoomAnchorImageY;
+        private double zoomAnchorImageX;
+        private double zoomAnchorImageY;
         private Timer zoomAnimationTimer;
         private Point imagePan;
         private Point panStart;
@@ -2640,7 +2640,7 @@ namespace SLTtechSoft
             }
         }
 
-        private void ApplyZoomAt(Point viewportPoint, float imageX, float imageY, float newZoom)
+        private void ApplyZoomAt(Point viewportPoint, double imageX, double imageY, float newZoom)
         {
             imageZoom = newZoom;
 
@@ -2720,12 +2720,22 @@ namespace SLTtechSoft
             markingImage.SizeMode = PictureBoxSizeMode.StretchImage;
             int scaledWidth = Math.Max(100, (int)Math.Round(markingImage.Image.Width * imageZoom));
             int scaledHeight = Math.Max(100, (int)Math.Round(markingImage.Image.Height * imageZoom));
-            if (markingImage.Width != scaledWidth) markingImage.Width = scaledWidth;
-            if (markingImage.Height != scaledHeight) markingImage.Height = scaledHeight;
 
-            int centeredLeft = (imageViewport.ClientSize.Width - markingImage.Width) / 2;
-            int centeredTop = (imageViewport.ClientSize.Height - markingImage.Height) / 2;
-            markingImage.Location = new Point(centeredLeft + imagePan.X, centeredTop + imagePan.Y);
+            imageViewport.SuspendLayout();
+            try
+            {
+                if (markingImage.Width != scaledWidth || markingImage.Height != scaledHeight)
+                    markingImage.Size = new Size(scaledWidth, scaledHeight);
+
+                int centeredLeft = (imageViewport.ClientSize.Width - scaledWidth) / 2;
+                int centeredTop = (imageViewport.ClientSize.Height - scaledHeight) / 2;
+                markingImage.Location = new Point(centeredLeft + imagePan.X, centeredTop + imagePan.Y);
+            }
+            finally
+            {
+                imageViewport.ResumeLayout(false);
+            }
+
             UpdateAllMarkingViews();
             UpdateZoomLabel();
         }

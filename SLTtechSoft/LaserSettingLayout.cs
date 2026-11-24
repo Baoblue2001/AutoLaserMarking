@@ -214,6 +214,7 @@ namespace SLTtechSoft
         private string botImageFileName = "";
         private string modelFolderPath = "";
         private bool refreshingPictureGrid;
+        private bool picturePreviewActive;
         private bool refreshingAxisControls;
         private bool loadingSurfaceControls;
         private CheckBox enableAxisTransform;
@@ -319,11 +320,19 @@ namespace SLTtechSoft
 
         private void LoadImage(string fileName, bool fitToViewport)
         {
+            LoadImage(fileName, fitToViewport, true);
+        }
+
+        private void LoadImage(string fileName, bool fitToViewport, bool updateSurfaceFileName)
+        {
             if (string.IsNullOrWhiteSpace(fileName) || !System.IO.File.Exists(fileName))
                 return;
 
-            if (currentSurface == LaserSurface.Top) topImageFileName = fileName;
-            else botImageFileName = fileName;
+            if (updateSurfaceFileName)
+            {
+                if (currentSurface == LaserSurface.Top) topImageFileName = fileName;
+                else botImageFileName = fileName;
+            }
 
             Bitmap loadedImage;
             using (FileStream stream = new FileStream(fileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
@@ -418,6 +427,7 @@ namespace SLTtechSoft
             btnloadimage.Click += LoadImageClick;
             scanImage.Click += ScanImageClick;
             dgvListPictureSub.CellDoubleClick += PictureGridCellDoubleClick;
+            dgvListPictureSub.MouseLeave += PictureGridMouseLeave;
             dgvListPictureSub.CellValueChanged += PictureGridCellValueChanged;
             dgvListPictureSub.DataError += (s, e) => { e.ThrowException = false; };
             btnAddPicture.Click += AddPicturesClick;
@@ -774,7 +784,22 @@ namespace SLTtechSoft
             if (e.RowIndex < 0 || e.RowIndex >= dgvListPictureSub.Rows.Count) return;
             LaserScanImageParameter picture = dgvListPictureSub.Rows[e.RowIndex].Tag as LaserScanImageParameter;
             string path = ResolvePicturePath(picture);
-            if (File.Exists(path)) LoadImage(path);
+            if (!File.Exists(path)) return;
+
+            picturePreviewActive = true;
+            LoadImage(path, false, false); // Temporary preview; do not replace the stitched-image path.
+        }
+
+        private void PictureGridMouseLeave(object sender, EventArgs e)
+        {
+            if (!picturePreviewActive) return;
+            picturePreviewActive = false;
+
+            string stitchedPath = currentSurface == LaserSurface.Top ? topImageFileName : botImageFileName;
+            if (File.Exists(stitchedPath))
+                LoadImage(stitchedPath, false, false);
+            else
+                RebuildSurfaceImage(currentSurface);
         }
 
         private void AddPicturesClick(object sender, EventArgs e)

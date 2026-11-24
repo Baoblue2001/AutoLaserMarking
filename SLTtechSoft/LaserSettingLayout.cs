@@ -13,6 +13,31 @@ using QRCoder;
 
 namespace SLTtechSoft
 {
+    // Double-buffer the viewport and its child controls as one visual surface.
+    // This prevents the image and floating marking labels from leaving paint trails
+    // while the viewport is being panned.
+    internal sealed class BufferedViewportPanel : Panel
+    {
+        public BufferedViewportPanel()
+        {
+            SetStyle(ControlStyles.UserPaint |
+                     ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer |
+                     ControlStyles.ResizeRedraw, true);
+            UpdateStyles();
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ExStyle |= 0x02000000; // WS_EX_COMPOSITED
+                return cp;
+            }
+        }
+    }
+
     public partial class LaserSettingLayout : Form
     {
         public event EventHandler SaveAllRequested;
@@ -1855,17 +1880,22 @@ namespace SLTtechSoft
         {
             if (e.Button != MouseButtons.Left && e.Button != MouseButtons.Middle) return;
             if (e.Button == MouseButtons.Left && !panMode) return;
+
             panning = true;
             panStart = Control.MousePosition;
-            ((Control)sender).Capture = true;
-            ((Control)sender).Cursor = Cursors.SizeAll;
+
+            // Always capture on the viewport, never on a moving child control.
+            // This keeps mouse-move events stable even when the pointer starts on a label.
+            imageViewport.Capture = true;
+            imageViewport.Cursor = Cursors.SizeAll;
+            markingImage.Cursor = Cursors.SizeAll;
         }
 
         private void PanMouseMove(object sender, MouseEventArgs e)
         {
             bool leftPan = panMode && (Control.MouseButtons & MouseButtons.Left) == MouseButtons.Left;
             bool middlePan = (Control.MouseButtons & MouseButtons.Middle) == MouseButtons.Middle;
-            if (!panning || !leftPan && !middlePan) return;
+            if (!panning || (!leftPan && !middlePan)) return;
 
             Point current = Control.MousePosition;
             int deltaX = current.X - panStart.X;
@@ -1881,8 +1911,9 @@ namespace SLTtechSoft
         {
             if (!panning || (e.Button != MouseButtons.Left && e.Button != MouseButtons.Middle)) return;
             panning = false;
-            ((Control)sender).Capture = false;
-            ((Control)sender).Cursor = panMode ? Cursors.Hand : Cursors.Default;
+            imageViewport.Capture = false;
+            imageViewport.Cursor = panMode ? Cursors.Hand : Cursors.Default;
+            markingImage.Cursor = panMode ? Cursors.Hand : Cursors.Default;
         }
 
         private void MarkingViewMouseDown(object sender, MouseEventArgs e)
@@ -2818,12 +2849,31 @@ namespace SLTtechSoft
         {
             if (markingImage.Image == null) return;
 
+            Rectangle oldImageBounds = markingImage.Bounds;
+            Rectangle oldViewportBounds = imageViewport.ClientRectangle;
             int centeredLeft = (imageViewport.ClientSize.Width - markingImage.Width) / 2;
             int centeredTop = (imageViewport.ClientSize.Height - markingImage.Height) / 2;
-            markingImage.Location = new Point(centeredLeft + imagePan.X, centeredTop + imagePan.Y);
+            Point nextLocation = new Point(centeredLeft + imagePan.X, centeredTop + imagePan.Y);
 
-            foreach (MarkingItem item in markings)
-                UpdateMarkingViewPositionOnly(item);
+            // Move the bitmap and its sibling marking labels in one layout batch.
+            imageViewport.SuspendLayout();
+            try
+            {
+                markingImage.Location = nextLocation;
+                foreach (MarkingItem item in markings)
+                    UpdateMarkingViewPositionOnly(item);
+            }
+            finally
+            {
+                imageViewport.ResumeLayout(false);
+            }
+
+            Rectangle dirty = Rectangle.Union(oldImageBounds, markingImage.Bounds);
+            dirty.Inflate(2, 2);
+            dirty.Intersect(oldViewportBounds);
+            if (!dirty.IsEmpty)
+                imageViewport.Invalidate(dirty, true);
+            imageViewport.Invalidate();
         }
 
         private void UpdateMarkingViewPositionOnly(MarkingItem item)
@@ -2891,6 +2941,9 @@ namespace SLTtechSoft
             fiducialList.Rows[row].Tag = item;
             item.View = new FiducialLabel { AutoSize = false, Size = new Size(48, 24), Text = "F" + item.Id, Font = new Font(Font.FontFamily, 9f, FontStyle.Bold), ForeColor = Color.Red, BackColor = Color.Transparent, Tag = item, Cursor = Cursors.Hand };
             item.View.MouseDown += FiducialMouseDown;
+            item.View.MouseDown += PanMouseDown;
+            item.View.MouseMove += PanMouseMove;
+            item.View.MouseUp += PanMouseUp;
             item.View.MouseWheel += MarkingImageMouseWheel;
             item.View.MouseEnter += ImageAreaMouseEnter;
             markingImage.Controls.Add(item.View);

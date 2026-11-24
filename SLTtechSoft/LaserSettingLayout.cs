@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Globalization;
 using System.Linq;
 using System.Windows.Forms;
 using Newtonsoft.Json;
@@ -173,6 +174,7 @@ namespace SLTtechSoft
         private string topImageFileName = "";
         private string botImageFileName = "";
         private string modelFolderPath = "";
+        private bool refreshingPictureGrid;
         private readonly List<MarkingItem> copiedMarkings = new List<MarkingItem>();
         private const float MarkingFontSize = 9.75f;
 
@@ -264,8 +266,13 @@ namespace SLTtechSoft
             if (currentSurface == LaserSurface.Top) topImageFileName = fileName;
             else botImageFileName = fileName;
 
+            Bitmap loadedImage;
+            using (FileStream stream = new FileStream(fileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (Image source = Image.FromStream(stream))
+                loadedImage = new Bitmap(source);
+
             Image oldImage = markingImage.Image;
-            markingImage.Image = Image.FromFile(fileName);
+            markingImage.Image = loadedImage;
             if (oldImage != null)
                 oldImage.Dispose();
 
@@ -339,6 +346,11 @@ namespace SLTtechSoft
             btnloadimage.Click += LoadImageClick;
             scanImage.Click += ScanImageClick;
             dgvListPictureSub.CellDoubleClick += PictureGridCellDoubleClick;
+            dgvListPictureSub.CellValueChanged += PictureGridCellValueChanged;
+            dgvListPictureSub.DataError += (s, e) => { e.ThrowException = false; };
+            btnAddPicture.Click += AddPicturesClick;
+            btnDeletePic.Click += DeleteSelectedPicturesClick;
+            btnPicDeleteAll.Click += DeleteAllPicturesClick;
             addFiducial.Click += AddFiducialClick;
             deleteFiducial.Click += DeleteFiducialClick;
             deleteAllFiducial.Click += (s, e) => DeleteAllFiducials();
@@ -362,6 +374,8 @@ namespace SLTtechSoft
             savedTopParameters = CloneSurface(topParameters);
             savedBotParameters = CloneSurface(botParameters);
             currentSurface = LaserSurface.Top;
+            RebuildSurfaceImage(LaserSurface.Top);
+            RebuildSurfaceImage(LaserSurface.Bot);
             btnTop.BackColor = Color.LightGreen;
             btnBot.BackColor = Color.WhiteSmoke;
             LoadSurfaceImage(topImageFileName);
@@ -388,7 +402,7 @@ namespace SLTtechSoft
             if (source == null) return target;
             target.ResolutionImage = source.ResolutionImage;
             foreach (LaserMarkingParameter marking in source.Markings ?? new List<LaserMarkingParameter>())
-                target.Markings.Add(new LaserMarkingParameter { Id = marking.Id, Product = marking.Product, Type = marking.Type, PrintType = marking.PrintType, Content = marking.Content, PositionX = marking.PositionX, PositionY = marking.PositionY });
+                target.Markings.Add(new LaserMarkingParameter { Id = marking.Id, Product = marking.Product, Type = marking.Type, PrintType = marking.PrintType, Content = marking.Content, PositionX = marking.PositionX, PositionY = marking.PositionY, Rotate = marking.Rotate });
             foreach (LaserFiducialParameter point in source.Fiducials ?? new List<LaserFiducialParameter>())
                 target.Fiducials.Add(new LaserFiducialParameter { Id = point.Id, PositionX = point.PositionX, PositionY = point.PositionY });
             target.ImagePixelToMM = source.ImagePixelToMM > 0 ? source.ImagePixelToMM : source.ResolutionImage;
@@ -420,6 +434,7 @@ namespace SLTtechSoft
         {
             SaveCurrentSurfaceToMemory();
             currentSurface = surface;
+            RebuildSurfaceImage(surface);
             btnTop.BackColor = surface == LaserSurface.Top ? Color.LightGreen : Color.WhiteSmoke;
             btnBot.BackColor = surface == LaserSurface.Bot ? Color.LightGreen : Color.WhiteSmoke;
             LoadSurfaceImage(surface == LaserSurface.Top ? topImageFileName : botImageFileName);
@@ -518,8 +533,8 @@ namespace SLTtechSoft
             dgvListPictureSub.AutoGenerateColumns = false;
             dgvListPictureSub.AllowUserToAddRows = false;
             dgvListPictureSub.AllowUserToDeleteRows = false;
-            dgvListPictureSub.ReadOnly = true;
-            dgvListPictureSub.MultiSelect = false;
+            dgvListPictureSub.ReadOnly = false;
+            dgvListPictureSub.MultiSelect = true;
             dgvListPictureSub.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
             dgvListPictureSub.RowHeadersVisible = false;
             dgvListPictureSub.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
@@ -530,11 +545,11 @@ namespace SLTtechSoft
             });
             dgvListPictureSub.Columns.Add(new DataGridViewTextBoxColumn
             {
-                Name = "colServoX", HeaderText = "Servo X", Width = 55, ReadOnly = true
+                Name = "colServoX", HeaderText = "Servo X (mm)", Width = 75, ReadOnly = false, ValueType = typeof(string)
             });
             dgvListPictureSub.Columns.Add(new DataGridViewTextBoxColumn
             {
-                Name = "colServoY", HeaderText = "Servo Y", Width = 55, ReadOnly = true
+                Name = "colServoY", HeaderText = "Servo Y (mm)", Width = 75, ReadOnly = false, ValueType = typeof(string)
             });
         }
 
@@ -549,13 +564,26 @@ namespace SLTtechSoft
         private void RefreshPictureGrid()
         {
             if (dgvListPictureSub == null) return;
-            dgvListPictureSub.Rows.Clear();
-            foreach (LaserScanImageParameter picture in CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
+            refreshingPictureGrid = true;
+            try
             {
-                string fullPath = ResolvePicturePath(picture);
-                int rowIndex = dgvListPictureSub.Rows.Add(fullPath, picture.ServoX, picture.ServoY);
-                dgvListPictureSub.Rows[rowIndex].Tag = picture;
-                dgvListPictureSub.Rows[rowIndex].Cells["colPicturePath"].ToolTipText = fullPath;
+                dgvListPictureSub.Rows.Clear();
+                foreach (LaserScanImageParameter picture in CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
+                {
+                    string fullPath = ResolvePicturePath(picture);
+                    int rowIndex = dgvListPictureSub.Rows.Add(
+                        fullPath,
+                        picture.ServoX.HasValue ? picture.ServoX.Value.ToString("0.###", CultureInfo.CurrentCulture) : "",
+                        picture.ServoY.HasValue ? picture.ServoY.Value.ToString("0.###", CultureInfo.CurrentCulture) : "");
+                    dgvListPictureSub.Rows[rowIndex].Tag = picture;
+                    dgvListPictureSub.Rows[rowIndex].Cells["colPicturePath"].ToolTipText = fullPath;
+                    if (!File.Exists(fullPath))
+                        dgvListPictureSub.Rows[rowIndex].DefaultCellStyle.ForeColor = Color.DarkRed;
+                }
+            }
+            finally
+            {
+                refreshingPictureGrid = false;
             }
         }
 
@@ -565,6 +593,248 @@ namespace SLTtechSoft
             LaserScanImageParameter picture = dgvListPictureSub.Rows[e.RowIndex].Tag as LaserScanImageParameter;
             string path = ResolvePicturePath(picture);
             if (File.Exists(path)) LoadImage(path);
+        }
+
+        private void AddPicturesClick(object sender, EventArgs e)
+        {
+            using (OpenFileDialog dialog = new OpenFileDialog())
+            {
+                dialog.Title = "Add pictures to " + (currentSurface == LaserSurface.Top ? "TOP" : "BOT");
+                dialog.Filter = "Image files|*.bmp;*.jpg;*.jpeg;*.png;*.gif;*.tif;*.tiff|All files|*.*";
+                dialog.Multiselect = true;
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+                if (string.IsNullOrWhiteSpace(modelFolderPath))
+                {
+                    MessageBox.Show("Please call or save a Model before adding pictures.", "Add Pictures",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                string surfaceFolder = currentSurface == LaserSurface.Top ? "TOP" : "BOT";
+                string relativeFolder = Path.Combine("LaserPictures", surfaceFolder);
+                string targetFolder = Path.Combine(modelFolderPath, relativeFolder);
+                try
+                {
+                    Directory.CreateDirectory(targetFolder);
+                    foreach (string sourcePath in dialog.FileNames)
+                    {
+                        if (!File.Exists(sourcePath)) continue;
+                        string extension = Path.GetExtension(sourcePath);
+                        string fileName = Path.GetFileNameWithoutExtension(sourcePath) + "_" +
+                            Guid.NewGuid().ToString("N").Substring(0, 8) + extension;
+                        string destination = Path.Combine(targetFolder, fileName);
+                        File.Copy(sourcePath, destination, false);
+
+                        CurrentParameters.ScanImages.Add(new LaserScanImageParameter
+                        {
+                            ImagePath = Path.Combine(relativeFolder, fileName),
+                            ServoX = null,
+                            ServoY = null,
+                            CaptureTime = DateTime.Now
+                        });
+                    }
+
+                    SaveCurrentSurfaceToMemory();
+                    RefreshPictureGrid();
+                    RebuildSurfaceImage(currentSurface);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Could not add pictures: " + ex.Message, "Add Pictures",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
+        private void DeleteSelectedPicturesClick(object sender, EventArgs e)
+        {
+            if (dgvListPictureSub.SelectedRows.Count == 0) return;
+            List<LaserScanImageParameter> selected = new List<LaserScanImageParameter>();
+            foreach (DataGridViewRow row in dgvListPictureSub.SelectedRows)
+            {
+                LaserScanImageParameter picture = row.Tag as LaserScanImageParameter;
+                if (picture != null && !selected.Contains(picture)) selected.Add(picture);
+            }
+            RemovePictures(selected);
+        }
+
+        private void DeleteAllPicturesClick(object sender, EventArgs e)
+        {
+            if (CurrentParameters.ScanImages == null || CurrentParameters.ScanImages.Count == 0) return;
+            DialogResult answer = MessageBox.Show(
+                "Delete all pictures from the " + (currentSurface == LaserSurface.Top ? "TOP" : "BOT") + " list?",
+                "Delete All Pictures", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (answer != DialogResult.Yes) return;
+            RemovePictures(new List<LaserScanImageParameter>(CurrentParameters.ScanImages));
+        }
+
+        private void RemovePictures(List<LaserScanImageParameter> pictures)
+        {
+            if (pictures == null || pictures.Count == 0) return;
+            foreach (LaserScanImageParameter picture in pictures)
+            {
+                CurrentParameters.ScanImages.Remove(picture);
+                DeleteModelPictureFile(picture);
+            }
+
+            SaveCurrentSurfaceToMemory();
+            RefreshPictureGrid();
+            RebuildSurfaceImage(currentSurface);
+        }
+
+        private void DeleteModelPictureFile(LaserScanImageParameter picture)
+        {
+            try
+            {
+                string path = ResolvePicturePath(picture);
+                if (string.IsNullOrWhiteSpace(modelFolderPath) || !File.Exists(path)) return;
+
+                string modelRoot = Path.GetFullPath(modelFolderPath).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                string fullPath = Path.GetFullPath(path);
+                string allowedRoot = Path.GetFullPath(Path.Combine(modelFolderPath, "LaserPictures")).
+                    TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
+                if (fullPath.StartsWith(allowedRoot, StringComparison.OrdinalIgnoreCase) &&
+                    fullPath.StartsWith(modelRoot, StringComparison.OrdinalIgnoreCase))
+                    File.Delete(fullPath);
+            }
+            catch
+            {
+                // Removing a list entry must not fail just because an old image file is locked.
+            }
+        }
+
+        private void PictureGridCellValueChanged(object sender, DataGridViewCellEventArgs e)
+        {
+            if (refreshingPictureGrid || e.RowIndex < 0 || e.ColumnIndex < 0) return;
+            string columnName = dgvListPictureSub.Columns[e.ColumnIndex].Name;
+            if (columnName != "colServoX" && columnName != "colServoY") return;
+
+            DataGridViewRow row = dgvListPictureSub.Rows[e.RowIndex];
+            LaserScanImageParameter picture = row.Tag as LaserScanImageParameter;
+            if (picture == null) return;
+
+            double? coordinate;
+            string raw = Convert.ToString(row.Cells[e.ColumnIndex].Value).Trim();
+            if (string.IsNullOrWhiteSpace(raw))
+                coordinate = null;
+            else
+            {
+                double parsed;
+                bool valid = double.TryParse(raw, NumberStyles.Float | NumberStyles.AllowThousands,
+                    CultureInfo.CurrentCulture, out parsed) ||
+                    double.TryParse(raw, NumberStyles.Float | NumberStyles.AllowThousands,
+                    CultureInfo.InvariantCulture, out parsed);
+                if (!valid || double.IsNaN(parsed) || double.IsInfinity(parsed))
+                {
+                    MessageBox.Show("Please enter a valid coordinate in millimetres, or leave the cell blank.",
+                        "Invalid Coordinate", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    RefreshPictureGrid();
+                    return;
+                }
+                coordinate = parsed;
+            }
+
+            if (columnName == "colServoX") picture.ServoX = coordinate;
+            else picture.ServoY = coordinate;
+
+            SaveCurrentSurfaceToMemory();
+            RebuildSurfaceImage(currentSurface);
+        }
+
+        private void RebuildSurfaceImage(LaserSurface surface)
+        {
+            LaserSurfaceParameter parameters = surface == LaserSurface.Top ? topParameters : botParameters;
+            List<Tuple<LaserScanImageParameter, Bitmap>> loaded = new List<Tuple<LaserScanImageParameter, Bitmap>>();
+            try
+            {
+                foreach (LaserScanImageParameter picture in parameters.ScanImages ?? new List<LaserScanImageParameter>())
+                {
+                    string path = ResolvePicturePath(picture);
+                    if (!File.Exists(path)) continue;
+                    try
+                    {
+                        using (Image source = Image.FromFile(path))
+                            loaded.Add(Tuple.Create(picture, new Bitmap(source)));
+                    }
+                    catch { }
+                }
+
+                List<Tuple<LaserScanImageParameter, Bitmap>> positioned =
+                    loaded.Where(x => x.Item1.ServoX.HasValue && x.Item1.ServoY.HasValue).ToList();
+
+                string outputPath = "";
+                if (positioned.Count == 0)
+                {
+                    if (loaded.Count > 0) outputPath = ResolvePicturePath(loaded[0].Item1);
+                }
+                else if (!string.IsNullOrWhiteSpace(modelFolderPath))
+                {
+                    // Servo XY are millimetres. ImagePixelToMM is interpreted as mm per source pixel.
+                    // Servo XY is the centre point of each captured image; positive Y is upward.
+                    double mmPerPixel = parameters.ImagePixelToMM > 0 ? parameters.ImagePixelToMM : 1.0;
+                    double minLeft = double.MaxValue, maxRight = double.MinValue;
+                    double minBottom = double.MaxValue, maxTop = double.MinValue;
+
+                    foreach (var item in positioned)
+                    {
+                        double halfWidth = item.Item2.Width * mmPerPixel / 2.0;
+                        double halfHeight = item.Item2.Height * mmPerPixel / 2.0;
+                        minLeft = Math.Min(minLeft, item.Item1.ServoX.Value - halfWidth);
+                        maxRight = Math.Max(maxRight, item.Item1.ServoX.Value + halfWidth);
+                        minBottom = Math.Min(minBottom, item.Item1.ServoY.Value - halfHeight);
+                        maxTop = Math.Max(maxTop, item.Item1.ServoY.Value + halfHeight);
+                    }
+
+                    int canvasWidth = (int)Math.Ceiling((maxRight - minLeft) / mmPerPixel);
+                    int canvasHeight = (int)Math.Ceiling((maxTop - minBottom) / mmPerPixel);
+                    if (canvasWidth <= 0 || canvasHeight <= 0 || canvasWidth > 30000 || canvasHeight > 30000 ||
+                        (long)canvasWidth * canvasHeight > 180000000L)
+                        throw new InvalidOperationException("The stitched image would be too large. Check the image scale and Servo XY values.");
+
+                    using (Bitmap canvas = new Bitmap(canvasWidth, canvasHeight, PixelFormat.Format24bppRgb))
+                    using (Graphics graphics = Graphics.FromImage(canvas))
+                    {
+                        graphics.Clear(Color.Black);
+                        graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                        foreach (var item in positioned)
+                        {
+                            int x = (int)Math.Round((item.Item1.ServoX.Value -
+                                item.Item2.Width * mmPerPixel / 2.0 - minLeft) / mmPerPixel);
+                            int y = (int)Math.Round((maxTop -
+                                (item.Item1.ServoY.Value + item.Item2.Height * mmPerPixel / 2.0)) / mmPerPixel);
+                            graphics.DrawImage(item.Item2, new Rectangle(x, y, item.Item2.Width, item.Item2.Height));
+                        }
+
+                        string surfaceFolder = surface == LaserSurface.Top ? "TOP" : "BOT";
+                        string targetFolder = Path.Combine(modelFolderPath, "LaserPictures", surfaceFolder);
+                        Directory.CreateDirectory(targetFolder);
+                        outputPath = Path.Combine(targetFolder, "Stitched_" + surfaceFolder + ".png");
+                        string temporaryPath = outputPath + "." + Guid.NewGuid().ToString("N") + ".tmp.png";
+                        canvas.Save(temporaryPath, ImageFormat.Png);
+                        if (File.Exists(outputPath)) File.Delete(outputPath);
+                        File.Move(temporaryPath, outputPath);
+                    }
+                }
+
+                if (surface == LaserSurface.Top) topImageFileName = outputPath;
+                else botImageFileName = outputPath;
+
+                if (currentSurface == surface)
+                    LoadSurfaceImage(outputPath);
+            }
+            catch (Exception ex)
+            {
+                if (currentSurface == surface)
+                    MessageBox.Show("Could not rebuild the " + (surface == LaserSurface.Top ? "TOP" : "BOT") +
+                        " image: " + ex.Message, "Image Stitching", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally
+            {
+                foreach (var item in loaded) item.Item2.Dispose();
+            }
         }
 
         private void ScanImageClick(object sender, EventArgs e)

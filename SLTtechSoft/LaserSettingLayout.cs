@@ -925,6 +925,77 @@ namespace SLTtechSoft
             }
         }
 
+        private void MigrateLegacyPointsToImageTiles(bool hadLegacyStitch, double originX, double originY, double oldMmPerPixel)
+        {
+            if (imageTiles.Count == 0) return;
+            double mmPerPixel = Math.Max(0.0000001, CurrentParameters.ImagePixelToMM);
+
+            Func<PointF, Tuple<string, PointF>> findSourcePoint = oldPixel =>
+            {
+                double machineX;
+                double machineY;
+                if (hadLegacyStitch && oldMmPerPixel > 0)
+                {
+                    machineX = originX + oldPixel.X * oldMmPerPixel;
+                    machineY = originY - oldPixel.Y * oldMmPerPixel;
+                }
+                else if (imageTiles.Count == 1)
+                {
+                    ImageTileInfo onlyTile = imageTiles[0];
+                    return Tuple.Create(onlyTile.ImageId, oldPixel);
+                }
+                else
+                {
+                    return null; // Legacy multi-image data without a stitch transform is ambiguous.
+                }
+
+                ImageTileInfo bestTile = null;
+                PointF bestLocal = PointF.Empty;
+                double bestDistance = double.MaxValue;
+                foreach (ImageTileInfo tile in imageTiles)
+                {
+                    LaserScanImageParameter picture = (CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
+                        .FirstOrDefault(x => string.Equals(x.Id, tile.ImageId, StringComparison.OrdinalIgnoreCase));
+                    if (picture == null || !picture.ServoX.HasValue || !picture.ServoY.HasValue) continue;
+
+                    PointF center = TransformServoAxes(picture.ServoX.Value, picture.ServoY.Value);
+                    PointF offset = InverseTransformServoAxes(machineX - center.X, machineY - center.Y);
+                    PointF local = new PointF(
+                        (float)(tile.SourceWidth / 2.0 + offset.X / mmPerPixel),
+                        (float)(tile.SourceHeight / 2.0 - offset.Y / mmPerPixel));
+                    if (local.X < 0 || local.Y < 0 || local.X > tile.SourceWidth || local.Y > tile.SourceHeight) continue;
+
+                    double distance = offset.X * offset.X + offset.Y * offset.Y;
+                    if (distance < bestDistance)
+                    {
+                        bestDistance = distance;
+                        bestTile = tile;
+                        bestLocal = local;
+                    }
+                }
+
+                return bestTile == null ? null : Tuple.Create(bestTile.ImageId, bestLocal);
+            };
+
+            foreach (MarkingItem item in markings.Where(x => string.IsNullOrWhiteSpace(x.ImageId)))
+            {
+                Tuple<string, PointF> migrated = findSourcePoint(item.Position);
+                if (migrated == null) continue;
+                item.ImageId = migrated.Item1;
+                item.LocalPosition = migrated.Item2;
+                item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+            }
+
+            foreach (FiducialItem item in fiducials.Where(x => string.IsNullOrWhiteSpace(x.ImageId)))
+            {
+                Tuple<string, PointF> migrated = findSourcePoint(item.Position);
+                if (migrated == null) continue;
+                item.ImageId = migrated.Item1;
+                item.LocalPosition = migrated.Item2;
+                item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+            }
+        }
+
         private void RepositionImageBoundItems()
         {
             foreach (MarkingItem item in markings)
@@ -942,6 +1013,10 @@ namespace SLTtechSoft
         private void RebuildSurfaceImage(LaserSurface surface, bool clearWhenNoPictures = false)
         {
             LaserSurfaceParameter parameters = surface == LaserSurface.Top ? topParameters : botParameters;
+            bool hadLegacyStitch = parameters.HasStitchCoordinateSystem && parameters.StitchPixelToMM > 0;
+            double legacyOriginX = parameters.StitchOriginX;
+            double legacyOriginY = parameters.StitchOriginY;
+            double legacyPixelToMM = parameters.StitchPixelToMM;
             if (surface == currentSurface) imageTiles.Clear();
             parameters.HasStitchCoordinateSystem = false;
             parameters.StitchPixelToMM = 0;
@@ -1048,6 +1123,7 @@ namespace SLTtechSoft
                     {
                         imageTiles.Clear();
                         imageTiles.AddRange(newTiles);
+                        MigrateLegacyPointsToImageTiles(hadLegacyStitch, legacyOriginX, legacyOriginY, legacyPixelToMM);
                     }
                 }
                 else

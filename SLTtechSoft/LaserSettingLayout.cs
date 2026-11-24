@@ -72,8 +72,24 @@ namespace SLTtechSoft
 
         private static float ParseResolution(string text, float fallback)
         {
+            if (string.IsNullOrWhiteSpace(text))
+                return fallback;
+
+            // Do not allow thousands separators here. On Vietnamese Windows, for example,
+            // "." is commonly the thousands separator and "0.02" could otherwise be parsed
+            // as 2 instead of 0.02. Accept either the current culture decimal separator
+            // or invariant "." while keeping the entered numeric value unambiguous.
             float value;
-            return float.TryParse(text, out value) && value > 0 ? value : fallback;
+            bool parsed = float.TryParse(text.Trim(), NumberStyles.Float,
+                CultureInfo.CurrentCulture, out value);
+
+            if (!parsed)
+                parsed = float.TryParse(text.Trim(), NumberStyles.Float,
+                    CultureInfo.InvariantCulture, out value);
+
+            return parsed && value > 0 && !float.IsNaN(value) && !float.IsInfinity(value)
+                ? value
+                : fallback;
         }
 
         private static string NormalizeMarkingType(string type)

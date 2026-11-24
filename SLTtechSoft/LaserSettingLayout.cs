@@ -255,7 +255,7 @@ namespace SLTtechSoft
 
         private void ConfigureImageViewport()
         {
-            //imageViewport.AutoScroll = true;
+            imageViewport.AutoScroll = true;
             imageViewport.Dock = DockStyle.Fill;
             imageViewport.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             markingImage.Dock = DockStyle.None;
@@ -304,6 +304,8 @@ namespace SLTtechSoft
             imageViewport.DragDrop += MarkingImageDragDrop;
             markingImage.MouseWheel += MarkingImageMouseWheel;
             imageViewport.MouseWheel += MarkingImageMouseWheel;
+            markingImage.MouseEnter += ImageAreaMouseEnter;
+            imageViewport.MouseEnter += ImageAreaMouseEnter;
             markingImage.TabStop = true;
             imageViewport.TabStop = true;
             markingImage.MouseDown += PanMouseDown;
@@ -419,6 +421,10 @@ namespace SLTtechSoft
             target.SwapServoAxes = source.SwapServoAxes;
             target.ReverseServoX = source.ReverseServoX;
             target.ReverseServoY = source.ReverseServoY;
+            target.HasStitchCoordinateSystem = source.HasStitchCoordinateSystem;
+            target.StitchOriginX = source.StitchOriginX;
+            target.StitchOriginY = source.StitchOriginY;
+            target.StitchPixelToMM = source.StitchPixelToMM;
             foreach (LaserScanImageParameter picture in source.ScanImages ?? new List<LaserScanImageParameter>())
                 target.ScanImages.Add(new LaserScanImageParameter
                 {
@@ -492,7 +498,11 @@ namespace SLTtechSoft
                 EnableServoAxisTransform = enableAxisTransform != null && enableAxisTransform.Checked,
                 SwapServoAxes = swapServoAxes != null && swapServoAxes.Checked,
                 ReverseServoX = reverseServoX != null && reverseServoX.Checked,
-                ReverseServoY = reverseServoY != null && reverseServoY.Checked
+                ReverseServoY = reverseServoY != null && reverseServoY.Checked,
+                HasStitchCoordinateSystem = CurrentParameters.HasStitchCoordinateSystem,
+                StitchOriginX = CurrentParameters.StitchOriginX,
+                StitchOriginY = CurrentParameters.StitchOriginY,
+                StitchPixelToMM = CurrentParameters.StitchPixelToMM
             };
             foreach (LaserScanImageParameter picture in CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
                 result.ScanImages.Add(new LaserScanImageParameter
@@ -857,6 +867,8 @@ namespace SLTtechSoft
         private void RebuildSurfaceImage(LaserSurface surface, bool clearWhenNoPictures = false)
         {
             LaserSurfaceParameter parameters = surface == LaserSurface.Top ? topParameters : botParameters;
+            parameters.HasStitchCoordinateSystem = false;
+            parameters.StitchPixelToMM = 0;
             List<Tuple<LaserScanImageParameter, Bitmap>> loaded = new List<Tuple<LaserScanImageParameter, Bitmap>>();
             try
             {
@@ -893,6 +905,7 @@ namespace SLTtechSoft
                     // This is only a visual staging preview; it is not a coordinate-accurate stitch.
                     if (!allHaveCoordinates)
                     {
+                        parameters.HasStitchCoordinateSystem = false;
                         int thumbWidth = 320;
                         int thumbHeight = 240;
                         int columns = Math.Min(3, loaded.Count);
@@ -978,6 +991,10 @@ namespace SLTtechSoft
 
                         int canvasWidth = (int)Math.Ceiling((maxRight - minLeft) / mmPerPixel);
                         int canvasHeight = (int)Math.Ceiling((maxTop - minBottom) / mmPerPixel);
+                        parameters.HasStitchCoordinateSystem = true;
+                        parameters.StitchOriginX = minLeft;
+                        parameters.StitchOriginY = maxTop;
+                        parameters.StitchPixelToMM = mmPerPixel;
                         if (canvasWidth <= 0 || canvasHeight <= 0 || canvasWidth > 30000 || canvasHeight > 30000 ||
                             (long)canvasWidth * canvasHeight > 180000000L)
                             throw new InvalidOperationException("The stitched image would be too large. Check ImagePixelToMM and Servo XY values.");
@@ -1013,7 +1030,10 @@ namespace SLTtechSoft
                 else botImageFileName = outputPath;
 
                 if (currentSurface == surface)
+                {
                     LoadSurfaceImage(outputPath);
+                    RefreshFiducialRows();
+                }
             }
             catch (Exception ex)
             {
@@ -1592,6 +1612,27 @@ namespace SLTtechSoft
 
         private static string FormatCoordinate(float value) { return value.ToString("0.00"); }
 
+        // Fiducial coordinates are absolute servo millimetres, derived from the stitched image origin.
+        // The centre of each captured image is placed at that image's ServoX/ServoY during stitching.
+        private PointF GetFiducialCoordinates(PointF imagePixel)
+        {
+            LaserSurfaceParameter parameters = CurrentParameters;
+            if (parameters.HasStitchCoordinateSystem && parameters.StitchPixelToMM > 0)
+            {
+                return new PointF(
+                    (float)(parameters.StitchOriginX + imagePixel.X * parameters.StitchPixelToMM),
+                    (float)(parameters.StitchOriginY - imagePixel.Y * parameters.StitchPixelToMM));
+            }
+
+            return new PointF(ToMillimeter(imagePixel.X), ToMillimeter(imagePixel.Y));
+        }
+
+        private void RefreshFiducialRows()
+        {
+            foreach (FiducialItem item in fiducials)
+                UpdateFiducialRow(item);
+        }
+
         private float Resolution
         {
             get
@@ -1612,6 +1653,7 @@ namespace SLTtechSoft
         private void ResolutionValueTextChanged(object sender, EventArgs e)
         {
             foreach (MarkingItem item in markings) UpdateMarkingRow(item);
+            RefreshFiducialRows();
             UpdatePositionControls(selectedMarking);
 
             if (ReferenceEquals(sender, imagePixelToMmValue) && !loadingSurfaceControls)
@@ -1763,23 +1805,26 @@ namespace SLTtechSoft
         {
             if (markingImage.Image == null || wheelDelta == 0) return;
 
-            Point scroll = imageViewport.AutoScrollPosition;
-            float imageX = (viewportPoint.X - scroll.X) / imageZoom;
-            float imageY = (viewportPoint.Y - scroll.Y) / imageZoom;
-            float zoomFactor = (float)Math.Pow(1.05, wheelDelta / 120.0);
-            float newZoom = Math.Max(0.1f, Math.Min(8f, imageZoom * zoomFactor));
-            if (Math.Abs(newZoom - imageZoom) < 0.0001f) return;
+            // Convert the cursor position to source-image coordinates before changing zoom.
+            Point imagePoint = markingImage.PointToClient(imageViewport.PointToScreen(viewportPoint));
+            float imageX = imagePoint.X / imageZoom;
+            float imageY = imagePoint.Y / imageZoom;
+
+            // Smaller per-notch increments make the zoom feel smoother.
+            float zoomFactor = (float)Math.Pow(1.012, wheelDelta);
+            float newZoom = Math.Max(0.05f, Math.Min(12f, imageZoom * zoomFactor));
+            if (Math.Abs(newZoom - imageZoom) < 0.00001f) return;
 
             imageZoom = newZoom;
             UpdateImageTransform();
 
-            int targetX = (int)(imageX * imageZoom - viewportPoint.X);
-            int targetY = (int)(imageY * imageZoom - viewportPoint.Y);
-            int maxX = Math.Max(0, markingImage.Width - imageViewport.ClientSize.Width);
-            int maxY = Math.Max(0, markingImage.Height - imageViewport.ClientSize.Height);
+            int targetX = (int)Math.Round(markingImage.Left + imageX * imageZoom - viewportPoint.X);
+            int targetY = (int)Math.Round(markingImage.Top + imageY * imageZoom - viewportPoint.Y);
+            int maxX = Math.Max(0, markingImage.Left + markingImage.Width - imageViewport.ClientSize.Width);
+            int maxY = Math.Max(0, markingImage.Top + markingImage.Height - imageViewport.ClientSize.Height);
             targetX = Math.Max(0, Math.Min(maxX, targetX));
             targetY = Math.Max(0, Math.Min(maxY, targetY));
-            imageViewport.AutoScrollPosition = new Point(-targetX, -targetY);
+            imageViewport.AutoScrollPosition = new Point(targetX, targetY);
         }
 
         private void MarkingImageMouseDown(object sender, MouseEventArgs e)
@@ -1818,10 +1863,11 @@ namespace SLTtechSoft
                 return;
             }
 
+            imageViewport.AutoScrollPosition = Point.Empty;
             int viewportWidth = Math.Max(1, imageViewport.ClientSize.Width - SystemInformation.VerticalScrollBarWidth);
             int viewportHeight = Math.Max(1, imageViewport.ClientSize.Height - SystemInformation.HorizontalScrollBarHeight);
             imageZoom = Math.Min((float)viewportWidth / markingImage.Image.Width, (float)viewportHeight / markingImage.Image.Height);
-            imageZoom = Math.Max(0.1f, Math.Min(8f, imageZoom));
+            imageZoom = Math.Max(0.05f, Math.Min(12f, imageZoom));
             imagePan = Point.Empty;
             UpdateImageTransform();
         }
@@ -1830,6 +1876,7 @@ namespace SLTtechSoft
         {
             if (markingImage.Image == null)
             {
+                imageViewport.AutoScrollMinSize = Size.Empty;
                 UpdateZoomLabel();
                 return;
             }
@@ -1842,8 +1889,8 @@ namespace SLTtechSoft
             markingImage.Left = markingImage.Width < viewportWidth ? (viewportWidth - markingImage.Width) / 2 : 0;
             markingImage.Top = markingImage.Height < viewportHeight ? (viewportHeight - markingImage.Height) / 2 : 0;
             imageViewport.AutoScrollMinSize = new Size(
-                Math.Max(viewportWidth, markingImage.Width),
-                Math.Max(viewportHeight, markingImage.Height));
+                Math.Max(viewportWidth, markingImage.Left + markingImage.Width),
+                Math.Max(viewportHeight, markingImage.Top + markingImage.Height));
             UpdateAllMarkingViews();
             UpdateZoomLabel();
         }
@@ -1888,7 +1935,8 @@ namespace SLTtechSoft
             nextFiducialId = Math.Max(nextFiducialId, id + 1);
             FiducialItem item = new FiducialItem { Id = id, Position = position };
             fiducials.Add(item);
-            int row = fiducialList.Rows.Add(item.Id.ToString(), FormatCoordinate(ToMillimeter(position.X)), FormatCoordinate(ToMillimeter(position.Y)));
+            PointF servoPosition = GetFiducialCoordinates(position);
+            int row = fiducialList.Rows.Add(item.Id.ToString(), FormatCoordinate(servoPosition.X), FormatCoordinate(servoPosition.Y));
             fiducialList.Rows[row].Tag = item;
             item.View = new FiducialLabel { AutoSize = false, Size = new Size(48, 24), Text = "F" + item.Id, Font = new Font(Font.FontFamily, 9f, FontStyle.Bold), ForeColor = Color.Red, BackColor = Color.Transparent, Tag = item, Cursor = Cursors.Hand };
             item.View.MouseDown += FiducialMouseDown;
@@ -1958,7 +2006,14 @@ namespace SLTtechSoft
         private void ClampFiducial(FiducialItem item) { if (markingImage.Image != null) item.Position = new PointF(Math.Max(0, Math.Min(markingImage.Image.Width, item.Position.X)), Math.Max(0, Math.Min(markingImage.Image.Height, item.Position.Y))); }
         private void UpdateFiducialRow(FiducialItem item)
         {
-            foreach (DataGridViewRow row in fiducialList.Rows) if (row.Tag == item) { row.Cells[1].Value = FormatCoordinate(ToMillimeter(item.Position.X)); row.Cells[2].Value = FormatCoordinate(ToMillimeter(item.Position.Y)); break; }
+            PointF servoPosition = GetFiducialCoordinates(item.Position);
+            foreach (DataGridViewRow row in fiducialList.Rows)
+                if (row.Tag == item)
+                {
+                    row.Cells[1].Value = FormatCoordinate(servoPosition.X);
+                    row.Cells[2].Value = FormatCoordinate(servoPosition.Y);
+                    break;
+                }
         }
         private void DeleteAllFiducials()
         {

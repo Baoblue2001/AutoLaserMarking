@@ -1036,7 +1036,13 @@ namespace SLTtechSoft
                 if (currentSurface == surface)
                 {
                     LoadSurfaceImage(outputPath);
+
+                    // Recalculate displayed machine coordinates after the stitch origin/extent changes.
+                    // Marking and Fiducial positions remain tied to their current canvas pixels.
+                    RefreshMarkingRows();
                     RefreshFiducialRows();
+                    UpdatePositionControls(selectedMarking);
+                    UpdateAllMarkingViews();
                 }
             }
             catch (Exception ex)
@@ -1212,7 +1218,9 @@ namespace SLTtechSoft
             };
             nextMarkingId = Math.Max(nextMarkingId, id + 1);
             markings.Add(item);
-            int row = markingList.Rows.Add(GetMarkingNumber(item),item.Product ,item.Type, FormatCoordinate(ToMillimeter(position.X)), FormatCoordinate(ToMillimeter(position.Y)));
+            PointF machinePosition = GetMarkingCoordinates(position);
+            int row = markingList.Rows.Add(GetMarkingNumber(item), item.Product, item.Type,
+                FormatCoordinate(machinePosition.X), FormatCoordinate(machinePosition.Y));
             markingList.Rows[row].Tag = item;
             CreateMarkingView(item);
             SelectMarking(item);
@@ -1856,6 +1864,12 @@ namespace SLTtechSoft
                 }
         }
 
+        private void RefreshMarkingRows()
+        {
+            foreach (MarkingItem item in markings)
+                UpdateMarkingRow(item);
+        }
+
         private void InitializeMarkingList()
         {
             if (markingList.Columns.Count == 0)
@@ -1899,10 +1913,9 @@ namespace SLTtechSoft
             float imageX = imagePoint.X / imageZoom;
             float imageY = imagePoint.Y / imageZoom;
 
-            // Predictable CAD-style zoom: 20% per wheel notch, anchored under the cursor.
-            int notches = Math.Max(1, Math.Abs(wheelDelta) / 120);
-            float zoomFactor = (float)Math.Pow(1.20, notches);
-            if (wheelDelta < 0) zoomFactor = 1f / zoomFactor;
+            // Continuous exponential zoom. A standard 120-unit wheel notch still changes
+            // scale by 20%, while high-resolution wheels/trackpads can send smaller deltas.
+            float zoomFactor = (float)Math.Pow(1.20, wheelDelta / 120.0);
             float newZoom = Math.Max(0.05f, Math.Min(12f, imageZoom * zoomFactor));
             if (Math.Abs(newZoom - imageZoom) < 0.00001f) return;
 

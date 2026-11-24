@@ -906,9 +906,24 @@ namespace SLTtechSoft
             }
         }
 
+        private void RepositionImageBoundItems()
+        {
+            foreach (MarkingItem item in markings)
+                if (!string.IsNullOrWhiteSpace(item.ImageId) && FindImageTile(item.ImageId) != null)
+                    item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+
+            foreach (FiducialItem item in fiducials)
+                if (!string.IsNullOrWhiteSpace(item.ImageId) && FindImageTile(item.ImageId) != null)
+                    item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+
+            UpdateAllMarkingViews();
+            UpdateAllFiducialViews();
+        }
+
         private void RebuildSurfaceImage(LaserSurface surface, bool clearWhenNoPictures = false)
         {
             LaserSurfaceParameter parameters = surface == LaserSurface.Top ? topParameters : botParameters;
+            if (surface == currentSurface) imageTiles.Clear();
             parameters.HasStitchCoordinateSystem = false;
             parameters.StitchPixelToMM = 0;
             List<Tuple<LaserScanImageParameter, Bitmap>> loaded = new List<Tuple<LaserScanImageParameter, Bitmap>>();
@@ -927,9 +942,6 @@ namespace SLTtechSoft
                 }
 
                 string outputPath = "";
-                bool allHaveCoordinates = loaded.Count > 0 &&
-                    loaded.All(x => x.Item1.ServoX.HasValue && x.Item1.ServoY.HasValue);
-
                 if (loaded.Count == 0)
                 {
                     if (clearWhenNoPictures || (parameters.ScanImages != null && parameters.ScanImages.Count > 0))
@@ -1031,8 +1043,8 @@ namespace SLTtechSoft
                 {
                     LoadSurfaceImage(outputPath);
 
-                    // Recalculate displayed machine coordinates after the stitch origin/extent changes.
-                    // Marking and Fiducial positions remain tied to their current canvas pixels.
+                    // Restore each point from its source-image pixel after rebuilding the preview.
+                    RepositionImageBoundItems();
                     RefreshMarkingRows();
                     RefreshFiducialRows();
                     UpdatePositionControls(selectedMarking);
@@ -1382,6 +1394,8 @@ namespace SLTtechSoft
                 MarkingItem item = original.Key;
                 item.Position = new PointF(original.Value.X + deltaX, original.Value.Y + deltaY);
                 ClampPosition(item);
+                if (!string.IsNullOrWhiteSpace(item.ImageId))
+                    item.LocalPosition = CanvasToSource(item.ImageId, item.Position);
                 UpdateMarkingView(item);
                 UpdateMarkingRow(item);
             }
@@ -1422,6 +1436,8 @@ namespace SLTtechSoft
                 //item.Rotate = GetMarkingRotation(item.Type).ToString().Replace("f", "");
                 copiedMarkings.Add(new MarkingItem
                 {
+                    ImageId = item.ImageId,
+                    LocalPosition = item.LocalPosition,
                     Product = item.Product,
                     Type = item.Type,
                     PrintType = item.PrintType,
@@ -1982,7 +1998,7 @@ namespace SLTtechSoft
             foreach (DataGridViewRow row in markingList.Rows)
                 if (row.Tag == item)
                 {
-                    PointF machinePosition = GetMarkingCoordinates(item.Position);
+                    PointF machinePosition = GetMarkingCoordinates(item);
                     row.Cells["X"].Value = FormatCoordinate(machinePosition.X);
                     row.Cells["Y"].Value = FormatCoordinate(machinePosition.Y);
                     break;
@@ -2261,6 +2277,8 @@ namespace SLTtechSoft
                 Point current = item.View.PointToScreen(args.Location);
                 item.Position = new PointF(original.X + (current.X - start.X) / imageZoom, original.Y + (current.Y - start.Y) / imageZoom);
                 ClampFiducial(item);
+                if (!string.IsNullOrWhiteSpace(item.ImageId))
+                    item.LocalPosition = CanvasToSource(item.ImageId, item.Position);
                 UpdateFiducialView(item);
                 UpdateFiducialRow(item);
             };
@@ -2281,7 +2299,7 @@ namespace SLTtechSoft
         private void ClampFiducial(FiducialItem item) { if (markingImage.Image != null) item.Position = new PointF(Math.Max(0, Math.Min(markingImage.Image.Width, item.Position.X)), Math.Max(0, Math.Min(markingImage.Image.Height, item.Position.Y))); }
         private void UpdateFiducialRow(FiducialItem item)
         {
-            PointF servoPosition = GetFiducialCoordinates(item.Position);
+            PointF servoPosition = GetFiducialCoordinates(item);
             foreach (DataGridViewRow row in fiducialList.Rows)
                 if (row.Tag == item)
                 {
@@ -2345,7 +2363,7 @@ namespace SLTtechSoft
             markingList.Rows.Clear();
             foreach (MarkingItem item in markings)
             {
-                PointF machinePosition = GetMarkingCoordinates(item.Position);
+                PointF machinePosition = GetMarkingCoordinates(item);
                 int row = markingList.Rows.Add(GetMarkingNumber(item), item.Product, item.Type,
                     FormatCoordinate(machinePosition.X), FormatCoordinate(machinePosition.Y));
                 markingList.Rows[row].Tag = item;

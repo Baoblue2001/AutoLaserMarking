@@ -156,6 +156,11 @@ namespace SLTtechSoft
         private int nextMarkingId;
         private int nextFiducialId;
         private float imageZoom = 1f;
+        private float targetZoom = 1f;
+        private Point zoomAnchor;
+        private float zoomAnchorImageX;
+        private float zoomAnchorImageY;
+        private Timer zoomAnimationTimer;
         private Point imagePan;
         private Point panStart;
         private bool panning;
@@ -188,6 +193,13 @@ namespace SLTtechSoft
         {
             InitializeComponent();
             KeyPreview = true;
+            zoomAnimationTimer = new Timer { Interval = 15 };
+            zoomAnimationTimer.Tick += ZoomAnimationTick;
+            FormClosed += (s, e) =>
+            {
+                zoomAnimationTimer.Stop();
+                zoomAnimationTimer.Dispose();
+            };
             ConfigurePictureGrid();
             ConfigureAxisTransformControls();
             ConfigureImageViewport();
@@ -1908,17 +1920,43 @@ namespace SLTtechSoft
         {
             if (markingImage.Image == null || wheelDelta == 0) return;
 
-            // Convert the cursor position to source-image coordinates before changing zoom.
+            // Keep the pixel under the cursor fixed throughout the animation.
             Point imagePoint = markingImage.PointToClient(imageViewport.PointToScreen(viewportPoint));
-            float imageX = imagePoint.X / imageZoom;
-            float imageY = imagePoint.Y / imageZoom;
+            zoomAnchorImageX = imagePoint.X / imageZoom;
+            zoomAnchorImageY = imagePoint.Y / imageZoom;
+            zoomAnchor = viewportPoint;
 
-            // Continuous exponential zoom. A standard 120-unit wheel notch still changes
-            // scale by 20%, while high-resolution wheels/trackpads can send smaller deltas.
-            float zoomFactor = (float)Math.Pow(1.20, wheelDelta / 120.0);
-            float newZoom = Math.Max(0.05f, Math.Min(12f, imageZoom * zoomFactor));
-            if (Math.Abs(newZoom - imageZoom) < 0.00001f) return;
+            float startingZoom = zoomAnimationTimer.Enabled ? targetZoom : imageZoom;
+            float zoomFactor = (float)Math.Pow(1.15, wheelDelta / 120.0);
+            targetZoom = Math.Max(0.05f, Math.Min(12f, startingZoom * zoomFactor));
+            if (Math.Abs(targetZoom - imageZoom) < 0.0001f)
+            {
+                zoomAnimationTimer.Stop();
+                return;
+            }
 
+            if (!zoomAnimationTimer.Enabled)
+                zoomAnimationTimer.Start();
+        }
+
+        private void ZoomAnimationTick(object sender, EventArgs e)
+        {
+            float difference = targetZoom - imageZoom;
+            float nextZoom = Math.Abs(difference) < 0.001f
+                ? targetZoom
+                : imageZoom + difference * 0.28f;
+
+            ApplyZoomAt(zoomAnchor, zoomAnchorImageX, zoomAnchorImageY, nextZoom);
+
+            if (Math.Abs(targetZoom - imageZoom) < 0.001f)
+            {
+                ApplyZoomAt(zoomAnchor, zoomAnchorImageX, zoomAnchorImageY, targetZoom);
+                zoomAnimationTimer.Stop();
+            }
+        }
+
+        private void ApplyZoomAt(Point viewportPoint, float imageX, float imageY, float newZoom)
+        {
             imageZoom = newZoom;
             UpdateImageTransform();
 
@@ -1960,9 +1998,13 @@ namespace SLTtechSoft
 
         private void FitImageClick(object sender, EventArgs e)
         {
+            if (zoomAnimationTimer != null)
+                zoomAnimationTimer.Stop();
+
             if (markingImage.Image == null)
             {
                 imageZoom = 1f;
+                targetZoom = imageZoom;
                 UpdateImageTransform();
                 return;
             }
@@ -1972,6 +2014,7 @@ namespace SLTtechSoft
             int viewportHeight = Math.Max(1, imageViewport.ClientSize.Height - SystemInformation.HorizontalScrollBarHeight);
             imageZoom = Math.Min((float)viewportWidth / markingImage.Image.Width, (float)viewportHeight / markingImage.Image.Height);
             imageZoom = Math.Max(0.05f, Math.Min(12f, imageZoom));
+            targetZoom = imageZoom;
             imagePan = Point.Empty;
             UpdateImageTransform();
         }

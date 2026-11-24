@@ -101,8 +101,19 @@ namespace SLTtechSoft
         private sealed class FiducialItem
         {
             public int Id;
-            public PointF Position;
+            public string ImageId;
+            public PointF LocalPosition;
+            public PointF Position; // Contact-sheet canvas position used only for drawing.
             public Label View;
+        }
+
+        private sealed class ImageTileInfo
+        {
+            public string ImageId;
+            public RectangleF DisplayBounds;
+            public int SourceWidth;
+            public int SourceHeight;
+            public float Scale;
         }
 
         private sealed class DirectionalMarkingLabel : Label
@@ -139,11 +150,13 @@ namespace SLTtechSoft
         public sealed class MarkingItem
         {
             public int Id;
+            public string ImageId;
+            public PointF LocalPosition;
             public string Product;
             public string Type;
             public string PrintType;
             public string Content;
-            public PointF Position;
+            public PointF Position; // Contact-sheet canvas position used only for drawing.
             public Label View;
             public string Rotate;
         }
@@ -151,6 +164,7 @@ namespace SLTtechSoft
         public  List<MarkingItem> markings = new List<MarkingItem>();
         private readonly List<MarkingItem> selectedMarkings = new List<MarkingItem>();
         private readonly List<FiducialItem> fiducials = new List<FiducialItem>();
+        private readonly List<ImageTileInfo> imageTiles = new List<ImageTileInfo>();
         public MarkingItem selectedMarking;
         private FiducialItem selectedFiducial;
         private int nextMarkingId;
@@ -428,9 +442,9 @@ namespace SLTtechSoft
             if (source == null) return target;
             target.ResolutionImage = source.ResolutionImage;
             foreach (LaserMarkingParameter marking in source.Markings ?? new List<LaserMarkingParameter>())
-                target.Markings.Add(new LaserMarkingParameter { Id = marking.Id, Product = marking.Product, Type = marking.Type, PrintType = marking.PrintType, Content = marking.Content, PositionX = marking.PositionX, PositionY = marking.PositionY, Rotate = marking.Rotate });
+                target.Markings.Add(new LaserMarkingParameter { Id = marking.Id, ImageId = marking.ImageId ?? "", Product = marking.Product, Type = marking.Type, PrintType = marking.PrintType, Content = marking.Content, PositionX = marking.PositionX, PositionY = marking.PositionY, Rotate = marking.Rotate });
             foreach (LaserFiducialParameter point in source.Fiducials ?? new List<LaserFiducialParameter>())
-                target.Fiducials.Add(new LaserFiducialParameter { Id = point.Id, PositionX = point.PositionX, PositionY = point.PositionY });
+                target.Fiducials.Add(new LaserFiducialParameter { Id = point.Id, ImageId = point.ImageId ?? "", PositionX = point.PositionX, PositionY = point.PositionY });
             target.ImagePixelToMM = source.ImagePixelToMM > 0 ? source.ImagePixelToMM : source.ResolutionImage;
             target.ResolutionImageRobot = source.ResolutionImageRobot > 0 ? source.ResolutionImageRobot : source.ResolutionImage;
             target.EnableServoAxisTransform = source.EnableServoAxisTransform;
@@ -444,6 +458,7 @@ namespace SLTtechSoft
             foreach (LaserScanImageParameter picture in source.ScanImages ?? new List<LaserScanImageParameter>())
                 target.ScanImages.Add(new LaserScanImageParameter
                 {
+                    Id = string.IsNullOrWhiteSpace(picture.Id) ? Guid.NewGuid().ToString("N") : picture.Id,
                     ImagePath = picture.ImagePath,
                     ServoX = picture.ServoX,
                     ServoY = picture.ServoY,
@@ -523,15 +538,16 @@ namespace SLTtechSoft
             foreach (LaserScanImageParameter picture in CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
                 result.ScanImages.Add(new LaserScanImageParameter
                 {
+                    Id = picture.Id,
                     ImagePath = picture.ImagePath,
                     ServoX = picture.ServoX,
                     ServoY = picture.ServoY,
                     CaptureTime = picture.CaptureTime
                 });
             foreach (MarkingItem item in markings)
-                result.Markings.Add(new LaserMarkingParameter { Id = item.Id, Product = item.Product, Type = item.Type, PrintType = item.PrintType, Content = item.Content, PositionX = item.Position.X, PositionY = item.Position.Y, Rotate = item.Rotate });
+                result.Markings.Add(new LaserMarkingParameter { Id = item.Id, ImageId = item.ImageId ?? "", Product = item.Product, Type = item.Type, PrintType = item.PrintType, Content = item.Content, PositionX = string.IsNullOrEmpty(item.ImageId) ? item.Position.X : item.LocalPosition.X, PositionY = string.IsNullOrEmpty(item.ImageId) ? item.Position.Y : item.LocalPosition.Y, Rotate = item.Rotate });
             foreach (FiducialItem point in fiducials)
-                result.Fiducials.Add(new LaserFiducialParameter { Id = point.Id, PositionX = point.Position.X, PositionY = point.Position.Y });
+                result.Fiducials.Add(new LaserFiducialParameter { Id = point.Id, ImageId = point.ImageId ?? "", PositionX = string.IsNullOrEmpty(point.ImageId) ? point.Position.X : point.LocalPosition.X, PositionY = string.IsNullOrEmpty(point.ImageId) ? point.Position.Y : point.LocalPosition.Y });
             return result;
         }
 

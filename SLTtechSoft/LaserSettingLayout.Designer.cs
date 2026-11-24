@@ -32,7 +32,7 @@ namespace SLTtechSoft
             this.panel5 = new System.Windows.Forms.Panel();
             this.panel6 = new System.Windows.Forms.Panel();
             this.imagePanel = new System.Windows.Forms.Panel();
-            this.imageViewport = new System.Windows.Forms.Panel();
+            this.imageViewport = new SLTtechSoft.BufferedViewportPanel();
             this.imageTools = new System.Windows.Forms.Panel();
             this.fitImage = new System.Windows.Forms.Button();
             this.zoomOut = new System.Windows.Forms.Button();
@@ -1093,7 +1093,7 @@ namespace SLTtechSoft
         private System.Windows.Forms.Button zoomOut;
         private System.Windows.Forms.Button zoomIn;
         private System.Windows.Forms.Label zoomLabel;
-        private System.Windows.Forms.Panel imageViewport;
+        private SLTtechSoft.BufferedViewportPanel imageViewport;
         private System.Windows.Forms.PictureBox markingImage;
         private System.Windows.Forms.Panel listPanel;
         private System.Windows.Forms.Label listTitle;

@@ -1603,6 +1603,69 @@ namespace SLTtechSoft
             return true;
         }
 
+        private bool TryFindTileAtCanvasPoint(PointF canvasPoint, out ImageTileInfo destination, out PointF localPoint)
+        {
+            destination = null;
+            localPoint = PointF.Empty;
+
+            // Iterate backwards because later tiles are painted on top of earlier ones.
+            for (int i = imageTiles.Count - 1; i >= 0; i--)
+            {
+                ImageTileInfo tile = imageTiles[i];
+                if (!tile.DisplayBounds.Contains(canvasPoint))
+                    continue;
+
+                PointF candidate = CanvasToSource(tile.ImageId, canvasPoint);
+                if (candidate.X < 0 || candidate.Y < 0 ||
+                    candidate.X > tile.SourceWidth || candidate.Y > tile.SourceHeight)
+                    continue;
+
+                destination = tile;
+                localPoint = candidate;
+                return true;
+            }
+
+            return false;
+        }
+
+        private void UpdateMarkingImageBinding(MarkingItem item)
+        {
+            if (item == null) return;
+
+            ImageTileInfo destination;
+            PointF local;
+            if (TryFindTileAtCanvasPoint(item.Position, out destination, out local))
+            {
+                item.ImageId = destination.ImageId;
+                item.LocalPosition = local;
+            }
+            else
+            {
+                // A point in the gap between tiles belongs to the stitched canvas itself.
+                // GetMarkingCoordinates(item.Position) converts it through the stitch origin.
+                item.ImageId = "";
+                item.LocalPosition = item.Position;
+            }
+        }
+
+        private void UpdateFiducialImageBinding(FiducialItem item)
+        {
+            if (item == null) return;
+
+            ImageTileInfo destination;
+            PointF local;
+            if (TryFindTileAtCanvasPoint(item.Position, out destination, out local))
+            {
+                item.ImageId = destination.ImageId;
+                item.LocalPosition = local;
+            }
+            else
+            {
+                item.ImageId = "";
+                item.LocalPosition = item.Position;
+            }
+        }
+
         private ImageTileInfo FindImageTile(string imageId)
         {
             if (string.IsNullOrWhiteSpace(imageId)) return null;
@@ -1783,10 +1846,10 @@ namespace SLTtechSoft
             foreach (KeyValuePair<MarkingItem, PointF> original in originals)
             {
                 MarkingItem item = original.Key;
+                // Keep the label in stitched-canvas coordinates while dragging.
+                // Do not clamp it to the source image that originally owned it.
                 item.Position = new PointF(original.Value.X + deltaX, original.Value.Y + deltaY);
-                ClampPosition(item);
-                if (!string.IsNullOrWhiteSpace(item.ImageId))
-                    item.LocalPosition = CanvasToSource(item.ImageId, item.Position);
+                UpdateMarkingImageBinding(item);
                 UpdateMarkingView(item);
                 UpdateMarkingRow(item);
             }
@@ -1796,10 +1859,27 @@ namespace SLTtechSoft
         private void StopMoveMarkingView(object sender, MouseEventArgs e)
         {
             Label view = (Label)sender;
+            object[] state = view.Tag as object[];
+            Dictionary<MarkingItem, PointF> originals = state != null && state.Length > 2
+                ? state[2] as Dictionary<MarkingItem, PointF>
+                : null;
+
             view.Capture = false;
             view.MouseMove -= MoveMarkingView;
             view.MouseUp -= StopMoveMarkingView;
-            view.Tag = view.Tag is object[] ? ((object[])view.Tag)[0] : view.Tag;
+            view.Tag = state != null && state.Length > 0 ? state[0] : view.Tag;
+
+            if (originals != null)
+            {
+                foreach (MarkingItem item in originals.Keys)
+                {
+                    UpdateMarkingImageBinding(item);
+                    UpdateMarkingView(item);
+                    UpdateMarkingRow(item);
+                }
+                UpdatePositionControls(selectedMarking);
+                SaveCurrentSurfaceToMemory();
+            }
         }
         //SelectMarking
         private void SelectMarking(MarkingItem item)
@@ -2735,10 +2815,9 @@ namespace SLTtechSoft
             move = (s, args) =>
             {
                 Point current = item.View.PointToScreen(args.Location);
+                // Fiducials can also move freely between stitched image tiles.
                 item.Position = new PointF(original.X + (current.X - start.X) / imageZoom, original.Y + (current.Y - start.Y) / imageZoom);
-                ClampFiducial(item);
-                if (!string.IsNullOrWhiteSpace(item.ImageId))
-                    item.LocalPosition = CanvasToSource(item.ImageId, item.Position);
+                UpdateFiducialImageBinding(item);
                 UpdateFiducialView(item);
                 UpdateFiducialRow(item);
             };

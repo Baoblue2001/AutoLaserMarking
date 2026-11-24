@@ -27,6 +27,10 @@ namespace SLTtechSoft
         public double ResolutionImage = 1.0;
         public double ImagePixelToMM = 1.0;
         public double ResolutionImageRobot = 1.0;
+        public bool EnableServoAxisTransform = false;
+        public bool SwapServoAxes = false;
+        public bool ReverseServoX = false;
+        public bool ReverseServoY = false;
 
         // Each scanned image has its own servo position; image paths are relative to the model folder.
         public List<LaserScanImageParameter> ScanImages = new List<LaserScanImageParameter>();

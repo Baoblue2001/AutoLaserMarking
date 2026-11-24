@@ -6,6 +6,7 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Globalization;
 using System.Linq;
+using System.Reflection;
 using System.Windows.Forms;
 using Newtonsoft.Json;
 using QRCoder;
@@ -310,7 +311,18 @@ namespace SLTtechSoft
             markingImage.Anchor = AnchorStyles.Top | AnchorStyles.Left;
             markingImage.AutoSize = false;
             markingImage.Location = Point.Empty;
+            EnableDoubleBuffering(imageViewport);
+            EnableDoubleBuffering(markingImage);
             imageViewport.Controls.SetChildIndex(markingImage, 0);
+        }
+
+        private static void EnableDoubleBuffering(Control control)
+        {
+            if (control == null) return;
+            PropertyInfo property = typeof(Control).GetProperty(
+                "DoubleBuffered", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (property != null)
+                property.SetValue(control, true, null);
         }
 
         public void LoadImage(string fileName)
@@ -1789,7 +1801,7 @@ namespace SLTtechSoft
             if (deltaX == 0 && deltaY == 0) return;
 
             imagePan = new Point(imagePan.X + deltaX, imagePan.Y + deltaY);
-            UpdateImageTransform();
+            UpdateImagePanOnly();
             panStart = current;
         }
 
@@ -2136,7 +2148,10 @@ namespace SLTtechSoft
             if (item.View == null) return;
             bool vertical = item.Type == "TOPTEXT" || item.Type == "BOTTOMTEXT";
             string displayText = string.IsNullOrWhiteSpace(item.Content) ? item.Type : item.Content;
+            Font previousFont = item.View.Font;
             item.View.Font = new Font("Times New Roman", Math.Max(1f, MarkingFontSize * imageZoom), FontStyle.Regular);
+            if (previousFont != null && !ReferenceEquals(previousFont, Control.DefaultFont))
+                previousFont.Dispose();
             string[] textLines = displayText.Replace("\r\n", "\n").Split('\n');
             int textWidth = 0;
             foreach (string line in textLines)
@@ -2699,16 +2714,37 @@ namespace SLTtechSoft
             }
 
             markingImage.SizeMode = PictureBoxSizeMode.StretchImage;
-            markingImage.Width = Math.Max(100, (int)(markingImage.Image.Width * imageZoom));
-            markingImage.Height = Math.Max(100, (int)(markingImage.Image.Height * imageZoom));
-            int viewportWidth = imageViewport.ClientSize.Width;
-            int viewportHeight = imageViewport.ClientSize.Height;
-            int centeredLeft = (viewportWidth - markingImage.Width) / 2;
-            int centeredTop = (viewportHeight - markingImage.Height) / 2;
-            markingImage.Left = centeredLeft + imagePan.X;
-            markingImage.Top = centeredTop + imagePan.Y;
+            int scaledWidth = Math.Max(100, (int)Math.Round(markingImage.Image.Width * imageZoom));
+            int scaledHeight = Math.Max(100, (int)Math.Round(markingImage.Image.Height * imageZoom));
+            if (markingImage.Width != scaledWidth) markingImage.Width = scaledWidth;
+            if (markingImage.Height != scaledHeight) markingImage.Height = scaledHeight;
+
+            int centeredLeft = (imageViewport.ClientSize.Width - markingImage.Width) / 2;
+            int centeredTop = (imageViewport.ClientSize.Height - markingImage.Height) / 2;
+            markingImage.Location = new Point(centeredLeft + imagePan.X, centeredTop + imagePan.Y);
             UpdateAllMarkingViews();
             UpdateZoomLabel();
+        }
+
+        // Panning only changes the canvas origin. Do not resize the bitmap or
+        // recalculate fonts/QR controls on every mouse-move message.
+        private void UpdateImagePanOnly()
+        {
+            if (markingImage.Image == null) return;
+
+            int centeredLeft = (imageViewport.ClientSize.Width - markingImage.Width) / 2;
+            int centeredTop = (imageViewport.ClientSize.Height - markingImage.Height) / 2;
+            markingImage.Location = new Point(centeredLeft + imagePan.X, centeredTop + imagePan.Y);
+
+            foreach (MarkingItem item in markings)
+                UpdateMarkingViewPositionOnly(item);
+        }
+
+        private void UpdateMarkingViewPositionOnly(MarkingItem item)
+        {
+            if (item == null || item.View == null) return;
+            item.View.Left = markingImage.Left + (int)Math.Round(item.Position.X * imageZoom) - item.View.Width / 2;
+            item.View.Top = markingImage.Top + (int)Math.Round(item.Position.Y * imageZoom) - item.View.Height / 2;
         }
 
         private void UpdateZoomLabel()

@@ -938,6 +938,39 @@ namespace SLTtechSoft
             }
         }
 
+        private bool TryMapLegacyContactSheetPoint(PointF oldCanvasPoint, out string imageId, out PointF sourcePoint)
+        {
+            imageId = "";
+            sourcePoint = PointF.Empty;
+            const int oldThumbWidth = 320;
+            const int oldThumbHeight = 240;
+            const int oldCellWidth = 344;
+            const int oldCellHeight = 288;
+            int columns = Math.Min(3, imageTiles.Count);
+
+            for (int i = 0; i < imageTiles.Count; i++)
+            {
+                ImageTileInfo tile = imageTiles[i];
+                double scale = Math.Min(oldThumbWidth / (double)tile.SourceWidth, oldThumbHeight / (double)tile.SourceHeight);
+                int drawWidth = Math.Max(1, (int)Math.Round(tile.SourceWidth * scale));
+                int drawHeight = Math.Max(1, (int)Math.Round(tile.SourceHeight * scale));
+                int cellX = 12 + (i % columns) * oldCellWidth;
+                int cellY = 12 + (i / columns) * oldCellHeight;
+                int drawX = cellX + (oldCellWidth - drawWidth) / 2;
+                int drawY = cellY + 4 + (oldThumbHeight - drawHeight) / 2;
+                RectangleF oldBounds = new RectangleF(drawX, drawY, drawWidth, drawHeight);
+                if (!oldBounds.Contains(oldCanvasPoint)) continue;
+
+                imageId = tile.ImageId;
+                sourcePoint = new PointF(
+                    (float)((oldCanvasPoint.X - drawX) / scale),
+                    (float)((oldCanvasPoint.Y - drawY) / scale));
+                return true;
+            }
+
+            return false;
+        }
+
         private void MigrateLegacyPointsToImageTiles(bool hadLegacyStitch, double originX, double originY, double oldMmPerPixel)
         {
             if (imageTiles.Count == 0) return;
@@ -952,14 +985,15 @@ namespace SLTtechSoft
                     machineX = originX + oldPixel.X * oldMmPerPixel;
                     machineY = originY - oldPixel.Y * oldMmPerPixel;
                 }
-                else if (imageTiles.Count == 1)
-                {
-                    ImageTileInfo onlyTile = imageTiles[0];
-                    return Tuple.Create(onlyTile.ImageId, oldPixel);
-                }
                 else
                 {
-                    return null; // Legacy multi-image data without a stitch transform is ambiguous.
+                    string legacyImageId;
+                    PointF legacyLocal;
+                    if (TryMapLegacyContactSheetPoint(oldPixel, out legacyImageId, out legacyLocal))
+                        return Tuple.Create(legacyImageId, legacyLocal);
+                    if (imageTiles.Count == 1)
+                        return Tuple.Create(imageTiles[0].ImageId, oldPixel);
+                    return null; // Legacy multi-image data without a known tile is ambiguous.
                 }
 
                 ImageTileInfo bestTile = null;

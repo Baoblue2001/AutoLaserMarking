@@ -113,6 +113,10 @@ namespace SLTtechSoft
             public RectangleF DisplayBounds;
             public int SourceWidth;
             public int SourceHeight;
+            // Affine mapping from source-image pixels to stitched-canvas pixels.
+            public PointF CanvasOrigin;
+            public PointF CanvasXAxis;
+            public PointF CanvasYAxis;
             public float Scale;
         }
 
@@ -1084,14 +1088,7 @@ namespace SLTtechSoft
                     item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
 
             foreach (FiducialItem item in fiducials)
-                if (!string.IsNullOrWhiteSpace(item.ImageId) && FindImageTile(item.ImageId) != null)
-                    item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
-
-            UpdateAllMarkingViews();
-            UpdateAllFiducialViews();
-        }
-
-        private void RebuildSurfaceImage(LaserSurface surface, bool clearWhenNoPictures = false)
+                if (!string.IsNullOrWhiteSpace(item.ImageId) && FindImageT        private void RebuildSurfaceImage(LaserSurface surface, bool clearWhenNoPictures = false)
         {
             LaserSurfaceParameter parameters = surface == LaserSurface.Top ? topParameters : botParameters;
             bool hadLegacyStitch = parameters.HasStitchCoordinateSystem && parameters.StitchPixelToMM > 0;
@@ -1099,9 +1096,12 @@ namespace SLTtechSoft
             double legacyOriginY = parameters.StitchOriginY;
             double legacyPixelToMM = parameters.StitchPixelToMM;
             if (surface == currentSurface) imageTiles.Clear();
+
             parameters.HasStitchCoordinateSystem = false;
             parameters.StitchPixelToMM = 0;
-            List<Tuple<LaserScanImageParameter, Bitmap>> loaded = new List<Tuple<LaserScanImageParameter, Bitmap>>();
+
+            List<Tuple<LaserScanImageParameter, Bitmap>> loaded =
+                new List<Tuple<LaserScanImageParameter, Bitmap>>();
             try
             {
                 foreach (LaserScanImageParameter picture in parameters.ScanImages ?? new List<LaserScanImageParameter>())
@@ -1119,97 +1119,188 @@ namespace SLTtechSoft
                 string outputPath = "";
                 if (loaded.Count == 0)
                 {
-                    if (clearWhenNoPictures || (parameters.ScanImages != null && parameters.ScanImages.Count > 0))
-                        outputPath = "";
-                    else
+                    if (!clearWhenNoPictures && (parameters.ScanImages == null || parameters.ScanImages.Count == 0))
                         outputPath = surface == LaserSurface.Top ? topImageFileName : botImageFileName;
-                }
-                else if (!string.IsNullOrWhiteSpace(modelFolderPath))
-                {
-                    string surfaceFolder = surface == LaserSurface.Top ? "TOP" : "BOT";
-                    string targetFolder = Path.Combine(modelFolderPath, "LaserPictures", surfaceFolder);
-                    Directory.CreateDirectory(targetFolder);
-
-                    // Always render a visual contact sheet. Servo coordinates and ImagePixelToMM
-                    // are deliberately excluded from layout: each source image occupies its own tile.
-                    parameters.HasStitchCoordinateSystem = false;
-                    parameters.StitchPixelToMM = 0;
-                    int thumbWidth = 480;
-                    int thumbHeight = 360;
-                    int columns = Math.Min(3, loaded.Count);
-                    int rows = (int)Math.Ceiling(loaded.Count / (double)columns);
-                    int cellWidth = thumbWidth + 32;
-                    int cellHeight = thumbHeight + 58;
-                    int canvasWidth = columns * cellWidth + 24;
-                    int canvasHeight = rows * cellHeight + 24;
-                    List<ImageTileInfo> newTiles = new List<ImageTileInfo>();
-
-                    using (Bitmap canvas = new Bitmap(canvasWidth, canvasHeight, PixelFormat.Format24bppRgb))
-                    using (Graphics graphics = Graphics.FromImage(canvas))
-                    using (Font font = new Font("Segoe UI", 9f))
-                    using (Brush textBrush = new SolidBrush(Color.White))
-                    using (Brush backgroundBrush = new SolidBrush(Color.FromArgb(45, 45, 45)))
-                    using (Pen tilePen = new Pen(Color.FromArgb(95, 125, 145), 1f))
-                    {
-                        graphics.Clear(Color.FromArgb(32, 32, 32));
-                        graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                        graphics.SmoothingMode = SmoothingMode.HighQuality;
-
-                        for (int i = 0; i < loaded.Count; i++)
-                        {
-                            Bitmap image = loaded[i].Item2;
-                            LaserScanImageParameter picture = loaded[i].Item1;
-                            if (string.IsNullOrWhiteSpace(picture.Id))
-                                picture.Id = Guid.NewGuid().ToString("N");
-
-                            int col = i % columns;
-                            int row = i / columns;
-                            int cellX = 12 + col * cellWidth;
-                            int cellY = 12 + row * cellHeight;
-                            graphics.FillRectangle(backgroundBrush, cellX, cellY, cellWidth - 8, cellHeight - 8);
-
-                            double factor = Math.Min(thumbWidth / (double)image.Width, thumbHeight / (double)image.Height);
-                            int drawWidth = Math.Max(1, (int)Math.Round(image.Width * factor));
-                            int drawHeight = Math.Max(1, (int)Math.Round(image.Height * factor));
-                            int drawX = cellX + (cellWidth - drawWidth) / 2;
-                            int drawY = cellY + 4 + (thumbHeight - drawHeight) / 2;
-                            graphics.DrawImage(image, new Rectangle(drawX, drawY, drawWidth, drawHeight));
-                            graphics.DrawRectangle(tilePen, drawX, drawY, drawWidth - 1, drawHeight - 1);
-
-                            newTiles.Add(new ImageTileInfo
-                            {
-                                ImageId = picture.Id,
-                                DisplayBounds = new RectangleF(drawX, drawY, drawWidth, drawHeight),
-                                SourceWidth = image.Width,
-                                SourceHeight = image.Height,
-                                Scale = (float)factor
-                            });
-
-                            string name = Path.GetFileName(picture.ImagePath);
-                            if (name.Length > 42) name = name.Substring(0, 39) + "...";
-                            string servo = picture.ServoX.HasValue && picture.ServoY.HasValue
-                                ? string.Format("X:{0:0.##}  Y:{1:0.##} mm", picture.ServoX.Value, picture.ServoY.Value)
-                                : "Servo X/Y not set";
-                            graphics.DrawString(name + "   " + servo, font, textBrush, cellX + 6, cellY + thumbHeight + 12);
-                        }
-
-                        outputPath = Path.Combine(targetFolder, "Preview_" + surfaceFolder + ".png");
-                        string temp = outputPath + "." + Guid.NewGuid().ToString("N") + ".tmp.png";
-                        canvas.Save(temp, ImageFormat.Png);
-                        if (File.Exists(outputPath)) File.Delete(outputPath);
-                        File.Move(temp, outputPath);
-                    }
-
-                    if (surface == currentSurface)
-                    {
-                        imageTiles.Clear();
-                        imageTiles.AddRange(newTiles);
-                        MigrateLegacyPointsToImageTiles(hadLegacyStitch, legacyOriginX, legacyOriginY, legacyPixelToMM);
-                    }
                 }
                 else
                 {
-                    outputPath = ResolvePicturePath(loaded[0].Item1);
+                    double mmPerPixel = parameters.ImagePixelToMM;
+                    if (double.IsNaN(mmPerPixel) || double.IsInfinity(mmPerPixel) || mmPerPixel <= 0)
+                        mmPerPixel = 0.02;
+
+                    // Only images with a known capture position can participate in a coordinate-based stitch.
+                    List<Tuple<LaserScanImageParameter, Bitmap>> positioned = loaded
+                        .Where(x => x.Item1.ServoX.HasValue && x.Item1.ServoY.HasValue)
+                        .ToList();
+
+                    if (positioned.Count > 0 && !string.IsNullOrWhiteSpace(modelFolderPath))
+                    {
+                        double minX = double.MaxValue;
+                        double maxX = double.MinValue;
+                        double minY = double.MaxValue;
+                        double maxY = double.MinValue;
+
+                        foreach (Tuple<LaserScanImageParameter, Bitmap> entry in positioned)
+                        {
+                            LaserScanImageParameter picture = entry.Item1;
+                            Bitmap image = entry.Item2;
+                            PointF[] corners =
+                            {
+                                GetServoImageMachinePoint(parameters, picture, image.Width, image.Height, mmPerPixel, 0, 0),
+                                GetServoImageMachinePoint(parameters, picture, image.Width, image.Height, mmPerPixel, image.Width, 0),
+                                GetServoImageMachinePoint(parameters, picture, image.Width, image.Height, mmPerPixel, 0, image.Height),
+                                GetServoImageMachinePoint(parameters, picture, image.Width, image.Height, mmPerPixel, image.Width, image.Height)
+                            };
+
+                            foreach (PointF corner in corners)
+                            {
+                                minX = Math.Min(minX, corner.X);
+                                maxX = Math.Max(maxX, corner.X);
+                                minY = Math.Min(minY, corner.Y);
+                                maxY = Math.Max(maxY, corner.Y);
+                            }
+                        }
+
+                        const float margin = 20f;
+                        double canvasWidthValue = Math.Ceiling((maxX - minX) / mmPerPixel + margin * 2);
+                        double canvasHeightValue = Math.Ceiling((maxY - minY) / mmPerPixel + margin * 2);
+                        if (canvasWidthValue < 1 || canvasHeightValue < 1 ||
+                            canvasWidthValue > 30000 || canvasHeightValue > 30000 ||
+                            canvasWidthValue * canvasHeightValue > 120000000)
+                            throw new InvalidOperationException(
+                                "The servo-positioned image area is too large to render. Check Servo X/Y and ImagePixelToMM.");
+
+                        int canvasWidth = (int)canvasWidthValue;
+                        int canvasHeight = (int)canvasHeightValue;
+                        List<ImageTileInfo> newTiles = new List<ImageTileInfo>();
+
+                        using (Bitmap canvas = new Bitmap(canvasWidth, canvasHeight, PixelFormat.Format24bppRgb))
+                        using (Graphics graphics = Graphics.FromImage(canvas))
+                        using (Pen tilePen = new Pen(Color.FromArgb(90, 130, 150), 1f))
+                        {
+                            graphics.Clear(Color.Black);
+                            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                            graphics.SmoothingMode = SmoothingMode.HighQuality;
+
+                            foreach (Tuple<LaserScanImageParameter, Bitmap> entry in positioned)
+                            {
+                                LaserScanImageParameter picture = entry.Item1;
+                                Bitmap image = entry.Item2;
+                                if (string.IsNullOrWhiteSpace(picture.Id))
+                                    picture.Id = Guid.NewGuid().ToString("N");
+
+                                PointF topLeftMachine = GetServoImageMachinePoint(
+                                    parameters, picture, image.Width, image.Height, mmPerPixel, 0, 0);
+                                PointF topRightMachine = GetServoImageMachinePoint(
+                                    parameters, picture, image.Width, image.Height, mmPerPixel, image.Width, 0);
+                                PointF bottomLeftMachine = GetServoImageMachinePoint(
+                                    parameters, picture, image.Width, image.Height, mmPerPixel, 0, image.Height);
+                                PointF bottomRightMachine = GetServoImageMachinePoint(
+                                    parameters, picture, image.Width, image.Height, mmPerPixel, image.Width, image.Height);
+
+                                PointF p00 = MachineToStitchPixel(topLeftMachine.X, topLeftMachine.Y, minX, maxY, mmPerPixel, margin);
+                                PointF p10 = MachineToStitchPixel(topRightMachine.X, topRightMachine.Y, minX, maxY, mmPerPixel, margin);
+                                PointF p01 = MachineToStitchPixel(bottomLeftMachine.X, bottomLeftMachine.Y, minX, maxY, mmPerPixel, margin);
+                                PointF p11 = MachineToStitchPixel(bottomRightMachine.X, bottomRightMachine.Y, minX, maxY, mmPerPixel, margin);
+
+                                PointF[] destination = { p00, p10, p01 };
+                                graphics.DrawImage(image, destination);
+                                graphics.DrawPolygon(tilePen, new[] { p00, p10, p11, p01 });
+
+                                float left = Math.Min(Math.Min(p00.X, p10.X), Math.Min(p01.X, p11.X));
+                                float top = Math.Min(Math.Min(p00.Y, p10.Y), Math.Min(p01.Y, p11.Y));
+                                float right = Math.Max(Math.Max(p00.X, p10.X), Math.Max(p01.X, p11.X));
+                                float bottom = Math.Max(Math.Max(p00.Y, p10.Y), Math.Max(p01.Y, p11.Y));
+
+                                newTiles.Add(new ImageTileInfo
+                                {
+                                    ImageId = picture.Id,
+                                    DisplayBounds = RectangleF.FromLTRB(left, top, right, bottom),
+                                    SourceWidth = image.Width,
+                                    SourceHeight = image.Height,
+                                    CanvasOrigin = p00,
+                                    CanvasXAxis = new PointF(p10.X - p00.X, p10.Y - p00.Y),
+                                    CanvasYAxis = new PointF(p01.X - p00.X, p01.Y - p00.Y),
+                                    Scale = 1f
+                                });
+                            }
+
+                            string surfaceFolder = surface == LaserSurface.Top ? "TOP" : "BOT";
+                            string targetFolder = Path.Combine(modelFolderPath, "LaserPictures", surfaceFolder);
+                            Directory.CreateDirectory(targetFolder);
+                            outputPath = Path.Combine(targetFolder, "Stitched_" + surfaceFolder + ".png");
+                            string temp = outputPath + "." + Guid.NewGuid().ToString("N") + ".tmp.png";
+                            canvas.Save(temp, ImageFormat.Png);
+                            if (File.Exists(outputPath)) File.Delete(outputPath);
+                            File.Move(temp, outputPath);
+                        }
+
+                        parameters.HasStitchCoordinateSystem = true;
+                        parameters.StitchOriginX = minX;
+                        parameters.StitchOriginY = maxY;
+                        parameters.StitchPixelToMM = mmPerPixel;
+
+                        if (surface == currentSurface)
+                        {
+                            imageTiles.Clear();
+                            imageTiles.AddRange(newTiles);
+                            MigrateLegacyPointsToImageTiles(hadLegacyStitch, legacyOriginX, legacyOriginY, legacyPixelToMM);
+                        }
+                    }
+                    else if (positioned.Count == 0)
+                    {
+                        // Keep the images visible in a contact sheet until their Servo X/Y values are entered.
+                        string surfaceFolder = surface == LaserSurface.Top ? "TOP" : "BOT";
+                        string targetFolder = Path.Combine(modelFolderPath, "LaserPictures", surfaceFolder);
+                        if (!string.IsNullOrWhiteSpace(modelFolderPath))
+                        {
+                            Directory.CreateDirectory(targetFolder);
+                            const int thumbWidth = 480;
+                            const int thumbHeight = 360;
+                            int columns = Math.Min(3, loaded.Count);
+                            int rows = (int)Math.Ceiling(loaded.Count / (double)columns);
+                            int cellWidth = thumbWidth + 32;
+                            int cellHeight = thumbHeight + 58;
+                            using (Bitmap canvas = new Bitmap(columns * cellWidth + 24, rows * cellHeight + 24))
+                            using (Graphics graphics = Graphics.FromImage(canvas))
+                            using (Font font = new Font("Segoe UI", 9f))
+                            using (Brush brush = new SolidBrush(Color.White))
+                            {
+                                graphics.Clear(Color.FromArgb(32, 32, 32));
+                                graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                                for (int i = 0; i < loaded.Count; i++)
+                                {
+                                    Bitmap image = loaded[i].Item2;
+                                    LaserScanImageParameter picture = loaded[i].Item1;
+                                    if (string.IsNullOrWhiteSpace(picture.Id))
+                                        picture.Id = Guid.NewGuid().ToString("N");
+                                    int col = i % columns;
+                                    int row = i / columns;
+                                    int x = 12 + col * cellWidth;
+                                    int y = 12 + row * cellHeight;
+                                    double factor = Math.Min(thumbWidth / (double)image.Width, thumbHeight / (double)image.Height);
+                                    int width = Math.Max(1, (int)Math.Round(image.Width * factor));
+                                    int height = Math.Max(1, (int)Math.Round(image.Height * factor));
+                                    int drawX = x + (cellWidth - width) / 2;
+                                    int drawY = y + 4 + (thumbHeight - height) / 2;
+                                    graphics.DrawImage(image, new Rectangle(drawX, drawY, width, height));
+                                    graphics.DrawString(Path.GetFileName(picture.ImagePath) + "   (Servo X/Y not set)",
+                                        font, brush, x + 6, y + thumbHeight + 12);
+                                }
+                                outputPath = Path.Combine(targetFolder, "Preview_" + surfaceFolder + ".png");
+                                string temp = outputPath + "." + Guid.NewGuid().ToString("N") + ".tmp.png";
+                                canvas.Save(temp, ImageFormat.Png);
+                                if (File.Exists(outputPath)) File.Delete(outputPath);
+                                File.Move(temp, outputPath);
+                            }
+                        }
+                    }
+                    else if (!string.IsNullOrWhiteSpace(modelFolderPath))
+                    {
+                        // Some images have positions and others do not: only positioned images are stitched.
+                        // The unpositioned images remain available in the picture grid.
+                    }
                 }
 
                 if (surface == LaserSurface.Top) topImageFileName = outputPath;
@@ -1218,8 +1309,6 @@ namespace SLTtechSoft
                 if (currentSurface == surface)
                 {
                     LoadSurfaceImage(outputPath);
-
-                    // Restore each point from its source-image pixel after rebuilding the preview.
                     RepositionImageBoundItems();
                     RefreshMarkingRows();
                     RefreshFiducialRows();
@@ -1232,6 +1321,14 @@ namespace SLTtechSoft
                 if (currentSurface == surface)
                     MessageBox.Show("Could not rebuild the " + (surface == LaserSurface.Top ? "TOP" : "BOT") +
                         " image: " + ex.Message, "Image Stitching", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally
+            {
+                foreach (var item in loaded) item.Item2.Dispose();
+            }
+        }
+
+ Stitching", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             finally
             {
@@ -1386,15 +1483,16 @@ namespace SLTtechSoft
             canvasPoint = new PointF(point.X / imageZoom, point.Y / imageZoom);
 
             PointF lookupPoint = canvasPoint;
-            ImageTileInfo tile = imageTiles.FirstOrDefault(x => x.DisplayBounds.Contains(lookupPoint));
+            ImageTileInfo tile = imageTiles.LastOrDefault(x => x.DisplayBounds.Contains(lookupPoint));
             if (tile == null) return false;
 
+            PointF candidate = CanvasToSource(tile.ImageId, canvasPoint);
+            if (candidate.X < 0 || candidate.Y < 0 ||
+                candidate.X > tile.SourceWidth || candidate.Y > tile.SourceHeight)
+                return false;
+
             imageId = tile.ImageId;
-            localPoint = new PointF(
-                (canvasPoint.X - tile.DisplayBounds.X) / tile.Scale,
-                (canvasPoint.Y - tile.DisplayBounds.Y) / tile.Scale);
-            localPoint.X = Math.Max(0, Math.Min(tile.SourceWidth, localPoint.X));
-            localPoint.Y = Math.Max(0, Math.Min(tile.SourceHeight, localPoint.Y));
+            localPoint = candidate;
             return true;
         }
 
@@ -1408,16 +1506,25 @@ namespace SLTtechSoft
         {
             ImageTileInfo tile = FindImageTile(imageId);
             if (tile == null) return sourcePoint;
-            return new PointF(tile.DisplayBounds.X + sourcePoint.X * tile.Scale,
-                              tile.DisplayBounds.Y + sourcePoint.Y * tile.Scale);
+            return new PointF(
+                tile.CanvasOrigin.X + sourcePoint.X * tile.CanvasXAxis.X + sourcePoint.Y * tile.CanvasYAxis.X,
+                tile.CanvasOrigin.Y + sourcePoint.X * tile.CanvasXAxis.Y + sourcePoint.Y * tile.CanvasYAxis.Y);
         }
 
         private PointF CanvasToSource(string imageId, PointF canvasPoint)
         {
             ImageTileInfo tile = FindImageTile(imageId);
-            if (tile == null || tile.Scale <= 0) return canvasPoint;
-            return new PointF((canvasPoint.X - tile.DisplayBounds.X) / tile.Scale,
-                              (canvasPoint.Y - tile.DisplayBounds.Y) / tile.Scale);
+            if (tile == null) return canvasPoint;
+
+            double dx = canvasPoint.X - tile.CanvasOrigin.X;
+            double dy = canvasPoint.Y - tile.CanvasOrigin.Y;
+            double determinant = tile.CanvasXAxis.X * tile.CanvasYAxis.Y -
+                                 tile.CanvasYAxis.X * tile.CanvasXAxis.Y;
+            if (Math.Abs(determinant) < 0.0000001) return PointF.Empty;
+
+            double sourceX = (dx * tile.CanvasYAxis.Y - dy * tile.CanvasYAxis.X) / determinant;
+            double sourceY = (tile.CanvasXAxis.X * dy - tile.CanvasXAxis.Y * dx) / determinant;
+            return new PointF((float)sourceX, (float)sourceY);
         }
         //Thêm Label laser
 
@@ -1896,14 +2003,38 @@ namespace SLTtechSoft
         // Servo X/Y identify the image centre at capture time; ImagePixelToMM is the sole scale.
         private PointF TransformServoAxes(double x, double y)
         {
-            LaserSurfaceParameter parameters = CurrentParameters;
-            if (parameters.EnableServoAxisTransform)
+            return TransformServoAxes(CurrentParameters, x, y);
+        }
+
+        private static PointF TransformServoAxes(LaserSurfaceParameter parameters, double x, double y)
+        {
+            if (parameters != null && parameters.EnableServoAxisTransform)
             {
                 if (parameters.SwapServoAxes) { double temp = x; x = y; y = temp; }
                 if (parameters.ReverseServoX) x = -x;
                 if (parameters.ReverseServoY) y = -y;
             }
             return new PointF((float)x, (float)y);
+        }
+
+        private static PointF GetServoImageMachinePoint(
+            LaserSurfaceParameter parameters, LaserScanImageParameter picture,
+            int imageWidth, int imageHeight, double mmPerPixel, double sourceX, double sourceY)
+        {
+            PointF center = TransformServoAxes(parameters, picture.ServoX.Value, picture.ServoY.Value);
+            PointF offset = TransformServoAxes(parameters,
+                (sourceX - imageWidth / 2.0) * mmPerPixel,
+                -(sourceY - imageHeight / 2.0) * mmPerPixel);
+            return new PointF(center.X + offset.X, center.Y + offset.Y);
+        }
+
+        private static PointF MachineToStitchPixel(
+            double machineX, double machineY, double minX, double maxY,
+            double mmPerPixel, float margin)
+        {
+            return new PointF(
+                (float)(margin + (machineX - minX) / mmPerPixel),
+                (float)(margin + (maxY - machineY) / mmPerPixel));
         }
 
         private PointF InverseTransformServoAxes(double x, double y)

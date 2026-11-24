@@ -87,6 +87,9 @@
     <Reference Include="ClosedXML.Parser, Version=1.0.0.0, Culture=neutral, PublicKeyToken=1d5f7376574c51ec, processorArchitecture=MSIL">
       <HintPath>..\packages\ClosedXML.Parser.1.2.0\lib\netstandard2.0\ClosedXML.Parser.dll</HintPath>
     </Reference>
+    <Reference Include="MvCamCtrl.Net">
+      <HintPath>..\..\..\..\..\Setup\MSV\MVS\Development\DotNet\win64\MvCamCtrl.Net.dll</HintPath>
+    </Reference>
     <Reference Include="QRCoder, Version=1.8.1.0, Culture=neutral, PublicKeyToken=c4ed5b9ae8358a28, processorArchitecture=MSIL">
       <HintPath>..\packages\QRCoder.1.8.1\lib\net40\QRCoder.dll</HintPath>
     </Reference>
@@ -237,15 +240,13 @@
     <Compile Include="FormOption.Designer.cs">
       <DependentUpon>FormOption.cs</DependentUpon>
     </Compile>
+<<<<<<< HEAD
     <Compile Include="BufferedViewportPanel.cs">
       <SubType>Component</SubType>
     </Compile>
-    <Compile Include="LaserSettingLayout.cs">
-      <SubType>Component</SubType>
-    </Compile>
-    <Compile Include="LaserSettingLayout.Designer.cs">
-      <DependentUpon>LaserSettingLayout.cs</DependentUpon>
-    </Compile>
+=======
+    <Compile Include="BufferedViewportPanel.cs" />
+>>>>>>> 35603ff4d8c4ea388d99aaaa17958fb04930880e
     <Compile Include="FrmVisionFileSetup.cs">
       <SubType>UserControl</SubType>
     </Compile>

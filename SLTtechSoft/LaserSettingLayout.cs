@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 using Newtonsoft.Json;
@@ -12,6 +14,7 @@ namespace SLTtechSoft
     public partial class LaserSettingLayout : Form
     {
         public event EventHandler SaveAllRequested;
+        public event Action<Action<Bitmap, int, int>> ScanImageRequested;
 
         private enum LaserSurface
         {
@@ -169,6 +172,7 @@ namespace SLTtechSoft
         private LaserSurfaceParameter savedBotParameters;
         private string topImageFileName = "";
         private string botImageFileName = "";
+        private string modelFolderPath = "";
         private readonly List<MarkingItem> copiedMarkings = new List<MarkingItem>();
         private const float MarkingFontSize = 9.75f;
 
@@ -176,6 +180,7 @@ namespace SLTtechSoft
         {
             InitializeComponent();
             KeyPreview = true;
+            ConfigurePictureGrid();
             ConfigureImageViewport();
             InitializeMarkingList();
             WireEvents();
@@ -251,33 +256,6 @@ namespace SLTtechSoft
             imageViewport.Controls.SetChildIndex(markingImage, 0);
         }
 
-        private sealed class CapturePositionData
-        {
-            public int ServoX { get; set; }
-            public int ServoY { get; set; }
-        }
-
-        private bool TryLoadCapturePosition(string imageFileName)
-        {
-            try
-            {
-                string sidecarPath = imageFileName + ".position.json";
-                if (!System.IO.File.Exists(sidecarPath)) return false;
-
-                string json = System.IO.File.ReadAllText(sidecarPath);
-                CapturePositionData data = JsonConvert.DeserializeObject<CapturePositionData>(json);
-                if (data == null) return false;
-
-                CurrentParameters.ServoXAtCapture = data.ServoX;
-                CurrentParameters.ServoYAtCapture = data.ServoY;
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
         public void LoadImage(string fileName)
         {
             if (string.IsNullOrWhiteSpace(fileName) || !System.IO.File.Exists(fileName))
@@ -290,9 +268,6 @@ namespace SLTtechSoft
             markingImage.Image = Image.FromFile(fileName);
             if (oldImage != null)
                 oldImage.Dispose();
-
-            // Load servo metadata saved beside this camera image, if available.
-            TryLoadCapturePosition(fileName);
 
             imagePan = Point.Empty;
             FitImageClick(this, EventArgs.Empty);
@@ -362,6 +337,8 @@ namespace SLTtechSoft
             zoomIn.Click += ZoomInClick;
             zoomOut.Click += ZoomOutClick;
             btnloadimage.Click += LoadImageClick;
+            scanImage.Click += ScanImageClick;
+            dgvListPictureSub.CellDoubleClick += PictureGridCellDoubleClick;
             addFiducial.Click += AddFiducialClick;
             deleteFiducial.Click += DeleteFiducialClick;
             deleteAllFiducial.Click += (s, e) => DeleteAllFiducials();
@@ -378,6 +355,10 @@ namespace SLTtechSoft
             botImageFileName = camera == null ? "" : camera.LaserBotImageFile;
             topParameters = CloneSurface(camera == null ? null : camera.Top);
             botParameters = CloneSurface(camera == null ? null : camera.Bot);
+            if (!File.Exists(topImageFileName) && topParameters.ScanImages.Count > 0)
+                topImageFileName = ResolvePicturePath(topParameters.ScanImages[0]);
+            if (!File.Exists(botImageFileName) && botParameters.ScanImages.Count > 0)
+                botImageFileName = ResolvePicturePath(botParameters.ScanImages[0]);
             savedTopParameters = CloneSurface(topParameters);
             savedBotParameters = CloneSurface(botParameters);
             currentSurface = LaserSurface.Top;
@@ -385,6 +366,7 @@ namespace SLTtechSoft
             btnBot.BackColor = Color.WhiteSmoke;
             LoadSurfaceImage(topImageFileName);
             LoadCurrentSurfaceToControls();
+            RefreshPictureGrid();
             FitImageClick(this, EventArgs.Empty);
         }
 
@@ -411,8 +393,14 @@ namespace SLTtechSoft
                 target.Fiducials.Add(new LaserFiducialParameter { Id = point.Id, PositionX = point.PositionX, PositionY = point.PositionY });
             target.ImagePixelToMM = source.ImagePixelToMM > 0 ? source.ImagePixelToMM : source.ResolutionImage;
             target.ResolutionImageRobot = source.ResolutionImageRobot > 0 ? source.ResolutionImageRobot : source.ResolutionImage;
-            target.ServoXAtCapture = source.ServoXAtCapture;
-            target.ServoYAtCapture = source.ServoYAtCapture;
+            foreach (LaserScanImageParameter picture in source.ScanImages ?? new List<LaserScanImageParameter>())
+                target.ScanImages.Add(new LaserScanImageParameter
+                {
+                    ImagePath = picture.ImagePath,
+                    ServoX = picture.ServoX,
+                    ServoY = picture.ServoY,
+                    CaptureTime = picture.CaptureTime
+                });
             return target;
         }
 
@@ -420,6 +408,13 @@ namespace SLTtechSoft
         {
             get { return currentSurface == LaserSurface.Top ? topParameters : botParameters; }
         }
+
+        public void SetModelFolderPath(string folderPath)
+        {
+            modelFolderPath = folderPath ?? "";
+            RefreshPictureGrid();
+        }
+
         //Lấy ảnh
         private void SwitchSurface(LaserSurface surface)
         {
@@ -462,10 +457,16 @@ namespace SLTtechSoft
             {
                 ResolutionImage = ParseResolution(resolutionValue.Text, 1f),
                 ImagePixelToMM = ParseResolution(imagePixelToMmValue.Text, 1f),
-                ResolutionImageRobot = ParseResolution(robotResolutionValue.Text, 1f),
-                ServoXAtCapture = CurrentParameters.ServoXAtCapture,
-                ServoYAtCapture = CurrentParameters.ServoYAtCapture
+                ResolutionImageRobot = ParseResolution(robotResolutionValue.Text, 1f)
             };
+            foreach (LaserScanImageParameter picture in CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
+                result.ScanImages.Add(new LaserScanImageParameter
+                {
+                    ImagePath = picture.ImagePath,
+                    ServoX = picture.ServoX,
+                    ServoY = picture.ServoY,
+                    CaptureTime = picture.CaptureTime
+                });
             foreach (MarkingItem item in markings)
                 result.Markings.Add(new LaserMarkingParameter { Id = item.Id, Product = item.Product, Type = item.Type, PrintType = item.PrintType, Content = item.Content, PositionX = item.Position.X, PositionY = item.Position.Y, Rotate = item.Rotate });
             foreach (FiducialItem point in fiducials)
@@ -486,6 +487,7 @@ namespace SLTtechSoft
             RebuildMarkingList();
             foreach (LaserFiducialParameter point in CurrentParameters.Fiducials ?? new List<LaserFiducialParameter>())
                 AddFiducial(new PointF((float)point.PositionX, (float)point.PositionY), point.Id);
+            RefreshPictureGrid();
         }
 
         private void SaveOneClick(object sender, EventArgs e)
@@ -510,6 +512,148 @@ namespace SLTtechSoft
             LoadCurrentSurfaceToControls();
         }
 
+        private void ConfigurePictureGrid()
+        {
+            dgvListPictureSub.Columns.Clear();
+            dgvListPictureSub.AutoGenerateColumns = false;
+            dgvListPictureSub.AllowUserToAddRows = false;
+            dgvListPictureSub.AllowUserToDeleteRows = false;
+            dgvListPictureSub.ReadOnly = true;
+            dgvListPictureSub.MultiSelect = false;
+            dgvListPictureSub.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            dgvListPictureSub.RowHeadersVisible = false;
+            dgvListPictureSub.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
+            dgvListPictureSub.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colPicturePath", HeaderText = "Ảnh",
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, MinimumWidth = 80, ReadOnly = true
+            });
+            dgvListPictureSub.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colServoX", HeaderText = "Servo X", Width = 55, ReadOnly = true
+            });
+            dgvListPictureSub.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colServoY", HeaderText = "Servo Y", Width = 55, ReadOnly = true
+            });
+        }
+
+        private string ResolvePicturePath(LaserScanImageParameter picture)
+        {
+            if (picture == null || string.IsNullOrWhiteSpace(picture.ImagePath)) return "";
+            if (Path.IsPathRooted(picture.ImagePath)) return picture.ImagePath;
+            if (string.IsNullOrWhiteSpace(modelFolderPath)) return picture.ImagePath;
+            return Path.GetFullPath(Path.Combine(modelFolderPath, picture.ImagePath));
+        }
+
+        private void RefreshPictureGrid()
+        {
+            if (dgvListPictureSub == null) return;
+            dgvListPictureSub.Rows.Clear();
+            foreach (LaserScanImageParameter picture in CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
+            {
+                string fullPath = ResolvePicturePath(picture);
+                int rowIndex = dgvListPictureSub.Rows.Add(fullPath, picture.ServoX, picture.ServoY);
+                dgvListPictureSub.Rows[rowIndex].Tag = picture;
+                dgvListPictureSub.Rows[rowIndex].Cells["colPicturePath"].ToolTipText = fullPath;
+            }
+        }
+
+        private void PictureGridCellDoubleClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.RowIndex >= dgvListPictureSub.Rows.Count) return;
+            LaserScanImageParameter picture = dgvListPictureSub.Rows[e.RowIndex].Tag as LaserScanImageParameter;
+            string path = ResolvePicturePath(picture);
+            if (File.Exists(path)) LoadImage(path);
+        }
+
+        private void ScanImageClick(object sender, EventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(modelFolderPath) || !Directory.Exists(modelFolderPath))
+            {
+                MessageBox.Show("Please save or call a Model before scanning images.", "Scan Image", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            Action<Action<Bitmap, int, int>> requestHandler = ScanImageRequested;
+            if (requestHandler == null)
+            {
+                MessageBox.Show("Camera scan is not connected to Form1.", "Scan Image", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            LaserSurface surfaceAtRequest = currentSurface;
+            string folderAtRequest = modelFolderPath;
+            Action<Bitmap, int, int> onCaptured = (capturedImage, servoX, servoY) =>
+                SaveScannedImage(capturedImage, servoX, servoY, surfaceAtRequest, folderAtRequest);
+            requestHandler(onCaptured);
+        }
+
+        private void SaveScannedImage(Bitmap capturedImage, int servoX, int servoY, LaserSurface surface, string modelFolder)
+        {
+            if (capturedImage == null) return;
+            string fullPath = "";
+            try
+            {
+                string surfaceFolder = surface == LaserSurface.Top ? "TOP" : "BOT";
+                string relativeFolder = Path.Combine("LaserPictures", surfaceFolder);
+                string targetFolder = Path.Combine(modelFolder, relativeFolder);
+                Directory.CreateDirectory(targetFolder);
+
+                string fileName = "Scan_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + "_" + Guid.NewGuid().ToString("N").Substring(0, 5) + ".jpg";
+                fullPath = Path.Combine(targetFolder, fileName);
+                capturedImage.Save(fullPath, ImageFormat.Jpeg);
+
+                LaserScanImageParameter picture = new LaserScanImageParameter
+                {
+                    ImagePath = Path.Combine(relativeFolder, fileName),
+                    ServoX = servoX,
+                    ServoY = servoY,
+                    CaptureTime = DateTime.Now
+                };
+
+                Action updateUi = () =>
+                {
+                    LaserSurfaceParameter targetParameters = surface == LaserSurface.Top ? topParameters : botParameters;
+                    if (targetParameters.ScanImages == null) targetParameters.ScanImages = new List<LaserScanImageParameter>();
+                    targetParameters.ScanImages.Add(picture);
+
+                    if (currentSurface == surface)
+                    {
+                        LoadImage(fullPath);
+                        RefreshPictureGrid();
+                    }
+
+                    SaveCurrentSurfaceToMemoryIfSelected(surface);
+                    SaveOneSnapshotForSurface(surface);
+                };
+
+                if (IsDisposed) return;
+                if (InvokeRequired) BeginInvoke(updateUi);
+                else updateUi();
+            }
+            catch (Exception ex)
+            {
+                if (!IsDisposed && IsHandleCreated)
+                    BeginInvoke((Action)(() => MessageBox.Show("Could not save scanned image: " + ex.Message, "Scan Image", MessageBoxButtons.OK, MessageBoxIcon.Error)));
+            }
+            finally
+            {
+                capturedImage.Dispose();
+            }
+        }
+
+        private void SaveCurrentSurfaceToMemoryIfSelected(LaserSurface surface)
+        {
+            if (currentSurface == surface) SaveCurrentSurfaceToMemory();
+        }
+
+        private void SaveOneSnapshotForSurface(LaserSurface surface)
+        {
+            if (surface == LaserSurface.Top) savedTopParameters = CloneSurface(topParameters);
+            else savedBotParameters = CloneSurface(botParameters);
+        }
+
         private void LoadImageClick(object sender, EventArgs e)
         {
             using (OpenFileDialog dialog = new OpenFileDialog())
@@ -518,16 +662,7 @@ namespace SLTtechSoft
                 dialog.Filter = "Image files|*.bmp;*.jpg;*.jpeg;*.png;*.gif;*.tif;*.tiff|All files|*.*";
                 dialog.Multiselect = false;
                 if (dialog.ShowDialog(this) == DialogResult.OK)
-                {
                     LoadImage(dialog.FileName);
-
-                    // A manually selected image without metadata has no known capture position.
-                    if (!TryLoadCapturePosition(dialog.FileName))
-                    {
-                        CurrentParameters.ServoXAtCapture = 0;
-                        CurrentParameters.ServoYAtCapture = 0;
-                    }
-                }
             }
         }
 

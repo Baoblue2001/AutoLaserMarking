@@ -32,12 +32,12 @@ namespace SLTtechSoft
             this.panel5 = new System.Windows.Forms.Panel();
             this.panel6 = new System.Windows.Forms.Panel();
             this.imagePanel = new System.Windows.Forms.Panel();
+            this.imageViewport = new System.Windows.Forms.Panel();
             this.imageTools = new System.Windows.Forms.Panel();
             this.fitImage = new System.Windows.Forms.Button();
             this.zoomOut = new System.Windows.Forms.Button();
             this.zoomIn = new System.Windows.Forms.Button();
             this.zoomLabel = new System.Windows.Forms.Label();
-            this.imageViewport = new System.Windows.Forms.Panel();
             this.markingImage = new System.Windows.Forms.PictureBox();
             this.codePanel = new System.Windows.Forms.Panel();
             this.codeTitle = new System.Windows.Forms.Label();
@@ -57,13 +57,6 @@ namespace SLTtechSoft
             this.addFiducial = new System.Windows.Forms.Button();
             this.deleteFiducial = new System.Windows.Forms.Button();
             this.deleteAllFiducial = new System.Windows.Forms.Button();
-            this.resolutionLabel = new System.Windows.Forms.Label();
-            this.resolutionValue = new System.Windows.Forms.TextBox();
-            this.resolutionUnit = new System.Windows.Forms.Label();
-            this.imagePixelToMmLabel = new System.Windows.Forms.Label();
-            this.imagePixelToMmValue = new System.Windows.Forms.TextBox();
-            this.robotResolutionLabel = new System.Windows.Forms.Label();
-            this.robotResolutionValue = new System.Windows.Forms.TextBox();
             this.listPanel = new System.Windows.Forms.Panel();
             this.listTitle = new System.Windows.Forms.Label();
             this.enableMarking = new System.Windows.Forms.CheckBox();
@@ -84,21 +77,34 @@ namespace SLTtechSoft
             this.widthLabel = new System.Windows.Forms.Label();
             this.heightLabel = new System.Windows.Forms.Label();
             this.widthValue = new System.Windows.Forms.TextBox();
+            this.resolutionUnit = new System.Windows.Forms.Label();
+            this.resolutionLabel = new System.Windows.Forms.Label();
             this.heightValue = new System.Windows.Forms.TextBox();
+            this.resolutionValue = new System.Windows.Forms.TextBox();
             this.widthUnit = new System.Windows.Forms.Label();
+            this.imagePixelToMmLabel = new System.Windows.Forms.Label();
             this.heightUnit = new System.Windows.Forms.Label();
+            this.imagePixelToMmValue = new System.Windows.Forms.TextBox();
             this.scanImage = new System.Windows.Forms.Button();
+            this.robotResolutionLabel = new System.Windows.Forms.Label();
             this.saveAll = new System.Windows.Forms.Button();
+            this.robotResolutionValue = new System.Windows.Forms.TextBox();
             this.saveOne = new System.Windows.Forms.Button();
             this.discard = new System.Windows.Forms.Button();
+            this.panel7 = new System.Windows.Forms.Panel();
+            this.ListPicture = new System.Windows.Forms.Label();
+            this.dgvListPictureSub = new System.Windows.Forms.DataGridView();
+            this.btnAddPicture = new System.Windows.Forms.Button();
+            this.btnDeletePic = new System.Windows.Forms.Button();
+            this.btnPicDeleteAll = new System.Windows.Forms.Button();
             this.panel1.SuspendLayout();
             this.topToolbar.SuspendLayout();
             this.panel2.SuspendLayout();
             this.panel5.SuspendLayout();
             this.panel6.SuspendLayout();
             this.imagePanel.SuspendLayout();
-            this.imageTools.SuspendLayout();
             this.imageViewport.SuspendLayout();
+            this.imageTools.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.markingImage)).BeginInit();
             this.codePanel.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.positionX)).BeginInit();
@@ -110,6 +116,8 @@ namespace SLTtechSoft
             this.panel3.SuspendLayout();
             this.panel4.SuspendLayout();
             this.productPanel.SuspendLayout();
+            this.panel7.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)(this.dgvListPictureSub)).BeginInit();
             this.SuspendLayout();
             // 
             // panel1
@@ -306,11 +314,12 @@ namespace SLTtechSoft
             this.panel2.Dock = System.Windows.Forms.DockStyle.Fill;
             this.panel2.Location = new System.Drawing.Point(0, 87);
             this.panel2.Name = "panel2";
-            this.panel2.Size = new System.Drawing.Size(1370, 673);
+            this.panel2.Size = new System.Drawing.Size(1370, 697);
             this.panel2.TabIndex = 7;
             // 
             // panel5
             // 
+            this.panel5.Controls.Add(this.panel7);
             this.panel5.Controls.Add(this.panel6);
             this.panel5.Controls.Add(this.codePanel);
             this.panel5.Controls.Add(this.fiducialPanel);
@@ -318,7 +327,7 @@ namespace SLTtechSoft
             this.panel5.Dock = System.Windows.Forms.DockStyle.Fill;
             this.panel5.Location = new System.Drawing.Point(0, 112);
             this.panel5.Name = "panel5";
-            this.panel5.Size = new System.Drawing.Size(1370, 561);
+            this.panel5.Size = new System.Drawing.Size(1370, 585);
             this.panel5.TabIndex = 12;
             // 
             // panel6
@@ -327,7 +336,7 @@ namespace SLTtechSoft
             this.panel6.Dock = System.Windows.Forms.DockStyle.Left;
             this.panel6.Location = new System.Drawing.Point(0, 0);
             this.panel6.Name = "panel6";
-            this.panel6.Size = new System.Drawing.Size(657, 561);
+            this.panel6.Size = new System.Drawing.Size(657, 585);
             this.panel6.TabIndex = 11;
             // 
             // imagePanel
@@ -338,8 +347,21 @@ namespace SLTtechSoft
             this.imagePanel.Dock = System.Windows.Forms.DockStyle.Fill;
             this.imagePanel.Location = new System.Drawing.Point(0, 0);
             this.imagePanel.Name = "imagePanel";
-            this.imagePanel.Size = new System.Drawing.Size(657, 561);
+            this.imagePanel.Size = new System.Drawing.Size(657, 585);
             this.imagePanel.TabIndex = 7;
+            // 
+            // imageViewport
+            // 
+            this.imageViewport.AutoScroll = true;
+            this.imageViewport.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(65)))), ((int)(((byte)(65)))), ((int)(((byte)(65)))));
+            this.imageViewport.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
+            this.imageViewport.Controls.Add(this.imageTools);
+            this.imageViewport.Controls.Add(this.markingImage);
+            this.imageViewport.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.imageViewport.Location = new System.Drawing.Point(0, 0);
+            this.imageViewport.Name = "imageViewport";
+            this.imageViewport.Size = new System.Drawing.Size(655, 583);
+            this.imageViewport.TabIndex = 1;
             // 
             // imageTools
             // 
@@ -386,19 +408,6 @@ namespace SLTtechSoft
             this.zoomLabel.Size = new System.Drawing.Size(35, 15);
             this.zoomLabel.TabIndex = 3;
             this.zoomLabel.Text = "100%";
-            // 
-            // imageViewport
-            // 
-            this.imageViewport.AutoScroll = true;
-            this.imageViewport.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(65)))), ((int)(((byte)(65)))), ((int)(((byte)(65)))));
-            this.imageViewport.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
-            this.imageViewport.Controls.Add(this.imageTools);
-            this.imageViewport.Controls.Add(this.markingImage);
-            this.imageViewport.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.imageViewport.Location = new System.Drawing.Point(0, 0);
-            this.imageViewport.Name = "imageViewport";
-            this.imageViewport.Size = new System.Drawing.Size(655, 559);
-            this.imageViewport.TabIndex = 1;
             // 
             // markingImage
             // 
@@ -530,7 +539,7 @@ namespace SLTtechSoft
             this.fiducialPanel.Controls.Add(this.addFiducial);
             this.fiducialPanel.Controls.Add(this.deleteFiducial);
             this.fiducialPanel.Controls.Add(this.deleteAllFiducial);
-            this.fiducialPanel.Location = new System.Drawing.Point(1064, 222);
+            this.fiducialPanel.Location = new System.Drawing.Point(1064, 198);
             this.fiducialPanel.Name = "fiducialPanel";
             this.fiducialPanel.Size = new System.Drawing.Size(300, 173);
             this.fiducialPanel.TabIndex = 10;
@@ -585,65 +594,6 @@ namespace SLTtechSoft
             this.deleteAllFiducial.Text = "Delete All";
             this.deleteAllFiducial.UseVisualStyleBackColor = false;
             // 
-            // resolutionLabel
-            // 
-            this.resolutionLabel.AutoSize = true;
-            this.resolutionLabel.Location = new System.Drawing.Point(629, 11);
-            this.resolutionLabel.Name = "resolutionLabel";
-            this.resolutionLabel.Size = new System.Drawing.Size(96, 15);
-            this.resolutionLabel.TabIndex = 5;
-            this.resolutionLabel.Text = "ResolutionImage";
-            // 
-            // resolutionValue
-            // 
-            this.resolutionValue.Location = new System.Drawing.Point(744, 7);
-            this.resolutionValue.Name = "resolutionValue";
-            this.resolutionValue.Size = new System.Drawing.Size(105, 23);
-            this.resolutionValue.TabIndex = 6;
-            this.resolutionValue.Text = "1";
-            // 
-            // resolutionUnit
-            // 
-            this.resolutionUnit.Location = new System.Drawing.Point(855, 11);
-            this.resolutionUnit.Name = "resolutionUnit";
-            this.resolutionUnit.Size = new System.Drawing.Size(100, 23);
-            this.resolutionUnit.TabIndex = 7;
-            this.resolutionUnit.Text = "mm/px";
-            // 
-            // imagePixelToMmLabel
-            // 
-            this.imagePixelToMmLabel.AutoSize = true;
-            this.imagePixelToMmLabel.Location = new System.Drawing.Point(629, 39);
-            this.imagePixelToMmLabel.Name = "imagePixelToMmLabel";
-            this.imagePixelToMmLabel.Size = new System.Drawing.Size(102, 15);
-            this.imagePixelToMmLabel.TabIndex = 8;
-            this.imagePixelToMmLabel.Text = "ImagePixelToMM:";
-            // 
-            // imagePixelToMmValue
-            // 
-            this.imagePixelToMmValue.Location = new System.Drawing.Point(744, 35);
-            this.imagePixelToMmValue.Name = "imagePixelToMmValue";
-            this.imagePixelToMmValue.Size = new System.Drawing.Size(105, 23);
-            this.imagePixelToMmValue.TabIndex = 8;
-            this.imagePixelToMmValue.Text = "1";
-            // 
-            // robotResolutionLabel
-            // 
-            this.robotResolutionLabel.AutoSize = true;
-            this.robotResolutionLabel.Location = new System.Drawing.Point(629, 70);
-            this.robotResolutionLabel.Name = "robotResolutionLabel";
-            this.robotResolutionLabel.Size = new System.Drawing.Size(101, 15);
-            this.robotResolutionLabel.TabIndex = 9;
-            this.robotResolutionLabel.Text = "Robot Resolution:";
-            // 
-            // robotResolutionValue
-            // 
-            this.robotResolutionValue.Location = new System.Drawing.Point(744, 66);
-            this.robotResolutionValue.Name = "robotResolutionValue";
-            this.robotResolutionValue.Size = new System.Drawing.Size(105, 23);
-            this.robotResolutionValue.TabIndex = 9;
-            this.robotResolutionValue.Text = "1";
-            // 
             // listPanel
             // 
             this.listPanel.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(157)))), ((int)(((byte)(184)))), ((int)(((byte)(211)))));
@@ -657,7 +607,7 @@ namespace SLTtechSoft
             this.listPanel.Controls.Add(this.deleteAllMarking);
             this.listPanel.Location = new System.Drawing.Point(663, 6);
             this.listPanel.Name = "listPanel";
-            this.listPanel.Size = new System.Drawing.Size(395, 540);
+            this.listPanel.Size = new System.Drawing.Size(395, 544);
             this.listPanel.TabIndex = 8;
             // 
             // listTitle
@@ -690,7 +640,7 @@ namespace SLTtechSoft
             this.markingList.Name = "markingList";
             this.markingList.RowHeadersVisible = false;
             this.markingList.SelectionMode = System.Windows.Forms.DataGridViewSelectionMode.FullRowSelect;
-            this.markingList.Size = new System.Drawing.Size(270, 495);
+            this.markingList.Size = new System.Drawing.Size(270, 504);
             this.markingList.TabIndex = 2;
             // 
             // moveUp
@@ -873,6 +823,23 @@ namespace SLTtechSoft
             this.widthValue.TabIndex = 3;
             this.widthValue.Text = "650.00";
             // 
+            // resolutionUnit
+            // 
+            this.resolutionUnit.Location = new System.Drawing.Point(855, 11);
+            this.resolutionUnit.Name = "resolutionUnit";
+            this.resolutionUnit.Size = new System.Drawing.Size(100, 23);
+            this.resolutionUnit.TabIndex = 7;
+            this.resolutionUnit.Text = "mm/px";
+            // 
+            // resolutionLabel
+            // 
+            this.resolutionLabel.AutoSize = true;
+            this.resolutionLabel.Location = new System.Drawing.Point(629, 11);
+            this.resolutionLabel.Name = "resolutionLabel";
+            this.resolutionLabel.Size = new System.Drawing.Size(96, 15);
+            this.resolutionLabel.TabIndex = 5;
+            this.resolutionLabel.Text = "ResolutionImage";
+            // 
             // heightValue
             // 
             this.heightValue.Location = new System.Drawing.Point(85, 63);
@@ -880,6 +847,14 @@ namespace SLTtechSoft
             this.heightValue.Size = new System.Drawing.Size(130, 23);
             this.heightValue.TabIndex = 4;
             this.heightValue.Text = "650.00";
+            // 
+            // resolutionValue
+            // 
+            this.resolutionValue.Location = new System.Drawing.Point(744, 7);
+            this.resolutionValue.Name = "resolutionValue";
+            this.resolutionValue.Size = new System.Drawing.Size(105, 23);
+            this.resolutionValue.TabIndex = 6;
+            this.resolutionValue.Text = "1";
             // 
             // widthUnit
             // 
@@ -889,6 +864,15 @@ namespace SLTtechSoft
             this.widthUnit.TabIndex = 5;
             this.widthUnit.Text = "mm";
             // 
+            // imagePixelToMmLabel
+            // 
+            this.imagePixelToMmLabel.AutoSize = true;
+            this.imagePixelToMmLabel.Location = new System.Drawing.Point(629, 39);
+            this.imagePixelToMmLabel.Name = "imagePixelToMmLabel";
+            this.imagePixelToMmLabel.Size = new System.Drawing.Size(102, 15);
+            this.imagePixelToMmLabel.TabIndex = 8;
+            this.imagePixelToMmLabel.Text = "ImagePixelToMM:";
+            // 
             // heightUnit
             // 
             this.heightUnit.Location = new System.Drawing.Point(225, 67);
@@ -896,6 +880,14 @@ namespace SLTtechSoft
             this.heightUnit.Size = new System.Drawing.Size(36, 23);
             this.heightUnit.TabIndex = 6;
             this.heightUnit.Text = "mm";
+            // 
+            // imagePixelToMmValue
+            // 
+            this.imagePixelToMmValue.Location = new System.Drawing.Point(744, 35);
+            this.imagePixelToMmValue.Name = "imagePixelToMmValue";
+            this.imagePixelToMmValue.Size = new System.Drawing.Size(105, 23);
+            this.imagePixelToMmValue.TabIndex = 8;
+            this.imagePixelToMmValue.Text = "1";
             // 
             // scanImage
             // 
@@ -907,6 +899,15 @@ namespace SLTtechSoft
             this.scanImage.Text = "Scan Image";
             this.scanImage.UseVisualStyleBackColor = false;
             // 
+            // robotResolutionLabel
+            // 
+            this.robotResolutionLabel.AutoSize = true;
+            this.robotResolutionLabel.Location = new System.Drawing.Point(629, 70);
+            this.robotResolutionLabel.Name = "robotResolutionLabel";
+            this.robotResolutionLabel.Size = new System.Drawing.Size(101, 15);
+            this.robotResolutionLabel.TabIndex = 9;
+            this.robotResolutionLabel.Text = "Robot Resolution:";
+            // 
             // saveAll
             // 
             this.saveAll.BackColor = System.Drawing.Color.Snow;
@@ -916,6 +917,14 @@ namespace SLTtechSoft
             this.saveAll.TabIndex = 9;
             this.saveAll.Text = "Save All";
             this.saveAll.UseVisualStyleBackColor = false;
+            // 
+            // robotResolutionValue
+            // 
+            this.robotResolutionValue.Location = new System.Drawing.Point(744, 66);
+            this.robotResolutionValue.Name = "robotResolutionValue";
+            this.robotResolutionValue.Size = new System.Drawing.Size(105, 23);
+            this.robotResolutionValue.TabIndex = 9;
+            this.robotResolutionValue.Text = "1";
             // 
             // saveOne
             // 
@@ -937,10 +946,74 @@ namespace SLTtechSoft
             this.discard.Text = "Discard";
             this.discard.UseVisualStyleBackColor = false;
             // 
+            // panel7
+            // 
+            this.panel7.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(157)))), ((int)(((byte)(184)))), ((int)(((byte)(211)))));
+            this.panel7.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
+            this.panel7.Controls.Add(this.ListPicture);
+            this.panel7.Controls.Add(this.dgvListPictureSub);
+            this.panel7.Controls.Add(this.btnAddPicture);
+            this.panel7.Controls.Add(this.btnDeletePic);
+            this.panel7.Controls.Add(this.btnPicDeleteAll);
+            this.panel7.Location = new System.Drawing.Point(1064, 377);
+            this.panel7.Name = "panel7";
+            this.panel7.Size = new System.Drawing.Size(300, 173);
+            this.panel7.TabIndex = 12;
+            // 
+            // ListPicture
+            // 
+            this.ListPicture.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(255)))), ((int)(((byte)(166)))), ((int)(((byte)(0)))));
+            this.ListPicture.Font = new System.Drawing.Font("Segoe UI", 10F, System.Drawing.FontStyle.Bold);
+            this.ListPicture.Location = new System.Drawing.Point(4, 7);
+            this.ListPicture.Name = "ListPicture";
+            this.ListPicture.Size = new System.Drawing.Size(215, 25);
+            this.ListPicture.TabIndex = 0;
+            this.ListPicture.Text = "Picture ";
+            // 
+            // dgvListPictureSub
+            // 
+            this.dgvListPictureSub.AllowUserToAddRows = false;
+            this.dgvListPictureSub.AutoSizeColumnsMode = System.Windows.Forms.DataGridViewAutoSizeColumnsMode.Fill;
+            this.dgvListPictureSub.Location = new System.Drawing.Point(5, 35);
+            this.dgvListPictureSub.Name = "dgvListPictureSub";
+            this.dgvListPictureSub.RowHeadersVisible = false;
+            this.dgvListPictureSub.Size = new System.Drawing.Size(214, 125);
+            this.dgvListPictureSub.TabIndex = 1;
+            // 
+            // btnAddPicture
+            // 
+            this.btnAddPicture.BackColor = System.Drawing.Color.Snow;
+            this.btnAddPicture.Location = new System.Drawing.Point(227, 35);
+            this.btnAddPicture.Name = "btnAddPicture";
+            this.btnAddPicture.Size = new System.Drawing.Size(72, 28);
+            this.btnAddPicture.TabIndex = 2;
+            this.btnAddPicture.Text = "Add";
+            this.btnAddPicture.UseVisualStyleBackColor = false;
+            // 
+            // btnDeletePic
+            // 
+            this.btnDeletePic.BackColor = System.Drawing.Color.Snow;
+            this.btnDeletePic.Location = new System.Drawing.Point(227, 69);
+            this.btnDeletePic.Name = "btnDeletePic";
+            this.btnDeletePic.Size = new System.Drawing.Size(72, 28);
+            this.btnDeletePic.TabIndex = 3;
+            this.btnDeletePic.Text = "Delete";
+            this.btnDeletePic.UseVisualStyleBackColor = false;
+            // 
+            // btnPicDeleteAll
+            // 
+            this.btnPicDeleteAll.BackColor = System.Drawing.Color.Snow;
+            this.btnPicDeleteAll.Location = new System.Drawing.Point(227, 104);
+            this.btnPicDeleteAll.Name = "btnPicDeleteAll";
+            this.btnPicDeleteAll.Size = new System.Drawing.Size(72, 28);
+            this.btnPicDeleteAll.TabIndex = 4;
+            this.btnPicDeleteAll.Text = "Delete All";
+            this.btnPicDeleteAll.UseVisualStyleBackColor = false;
+            // 
             // LaserSettingLayout
             // 
             this.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(157)))), ((int)(((byte)(184)))), ((int)(((byte)(211)))));
-            this.ClientSize = new System.Drawing.Size(1370, 760);
+            this.ClientSize = new System.Drawing.Size(1370, 784);
             this.Controls.Add(this.panel2);
             this.Controls.Add(this.panel1);
             this.Font = new System.Drawing.Font("Segoe UI", 9F);
@@ -954,9 +1027,9 @@ namespace SLTtechSoft
             this.panel5.ResumeLayout(false);
             this.panel6.ResumeLayout(false);
             this.imagePanel.ResumeLayout(false);
+            this.imageViewport.ResumeLayout(false);
             this.imageTools.ResumeLayout(false);
             this.imageTools.PerformLayout();
-            this.imageViewport.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)(this.markingImage)).EndInit();
             this.codePanel.ResumeLayout(false);
             this.codePanel.PerformLayout();
@@ -972,6 +1045,8 @@ namespace SLTtechSoft
             this.panel4.PerformLayout();
             this.productPanel.ResumeLayout(false);
             this.productPanel.PerformLayout();
+            this.panel7.ResumeLayout(false);
+            ((System.ComponentModel.ISupportInitialize)(this.dgvListPictureSub)).EndInit();
             this.ResumeLayout(false);
 
         }
@@ -1055,5 +1130,11 @@ namespace SLTtechSoft
         private System.Windows.Forms.TextBox markingContent;
         private System.Windows.Forms.Label printTypeLabel;
         private System.Windows.Forms.Label markingContentLabel;
+        private System.Windows.Forms.Panel panel7;
+        private System.Windows.Forms.Label ListPicture;
+        private System.Windows.Forms.DataGridView dgvListPictureSub;
+        private System.Windows.Forms.Button btnAddPicture;
+        private System.Windows.Forms.Button btnDeletePic;
+        private System.Windows.Forms.Button btnPicDeleteAll;
     }
 }

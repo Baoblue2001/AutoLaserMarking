@@ -1554,7 +1554,7 @@ namespace SLTtechSoft
                 {
                     ServoX = servoX,
                     ServoY = servoY
-                }, Formatting.Indented);
+                }, Newtonsoft.Json.Formatting.Indented);
                 File.WriteAllText(sidecarPath, json);
             }
             catch (Exception ex)

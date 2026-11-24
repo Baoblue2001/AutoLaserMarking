@@ -1940,6 +1940,8 @@ namespace SLTtechSoft
             fiducialList.Rows[row].Tag = item;
             item.View = new FiducialLabel { AutoSize = false, Size = new Size(48, 24), Text = "F" + item.Id, Font = new Font(Font.FontFamily, 9f, FontStyle.Bold), ForeColor = Color.Red, BackColor = Color.Transparent, Tag = item, Cursor = Cursors.Hand };
             item.View.MouseDown += FiducialMouseDown;
+            item.View.MouseWheel += MarkingImageMouseWheel;
+            item.View.MouseEnter += ImageAreaMouseEnter;
             markingImage.Controls.Add(item.View);
             item.View.BringToFront();
             UpdateFiducialView(item);

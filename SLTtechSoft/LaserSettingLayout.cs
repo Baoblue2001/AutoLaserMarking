@@ -1755,6 +1755,7 @@ namespace SLTtechSoft
 
         private static decimal ClampValue(NumericUpDown control, float value)
         {
+            if (float.IsNaN(value) || float.IsInfinity(value)) return control.Minimum;
             return Math.Max(control.Minimum, Math.Min(control.Maximum, (decimal)value));
         }
 
@@ -1957,6 +1958,13 @@ namespace SLTtechSoft
             }
 
             PointF machine = GetMarkingCoordinates(item);
+            if (float.IsNaN(machine.X) || float.IsNaN(machine.Y))
+            {
+                MessageBox.Show("Set Servo X and Servo Y for the source picture before editing machine coordinates.",
+                    "Servo Position Required", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateMarkingRow(item);
+                return;
+            }
             if (column == "X") machine.X = value;
             else machine.Y = value;
 
@@ -1983,6 +1991,13 @@ namespace SLTtechSoft
             }
 
             PointF machine = GetFiducialCoordinates(item);
+            if (float.IsNaN(machine.X) || float.IsNaN(machine.Y))
+            {
+                MessageBox.Show("Set Servo X and Servo Y for the source picture before editing machine coordinates.",
+                    "Servo Position Required", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateFiducialRow(item);
+                return;
+            }
             if (e.ColumnIndex == 1) machine.X = value;
             else machine.Y = value;
 

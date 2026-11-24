@@ -1554,6 +1554,8 @@ namespace SLTtechSoft
                 MarkingItem pasted = new MarkingItem
                 {
                     Id = nextMarkingId++,
+                    ImageId = copiedMarking.ImageId,
+                    LocalPosition = copiedMarking.LocalPosition,
                     Product = copiedMarking.Product,
                     Type = copiedMarking.Type,
                     PrintType = copiedMarking.PrintType,
@@ -1566,9 +1568,9 @@ namespace SLTtechSoft
                 markings.Add(pasted);
                 pastedMarkings.Add(pasted);
 
-                int row = markingList.Rows.Add(GetMarkingNumber(pasted),pasted.Product ,pasted.Type,
-                    FormatCoordinate(ToMillimeter(pasted.Position.X)),
-                    FormatCoordinate(ToMillimeter(pasted.Position.Y)));
+                int row = markingList.Rows.Add(GetMarkingNumber(pasted), pasted.Product, pasted.Type,
+                    FormatCoordinate(GetMarkingCoordinates(pasted).X),
+                    FormatCoordinate(GetMarkingCoordinates(pasted).Y));
                 markingList.Rows[row].Tag = pasted;
                 CreateMarkingView(pasted);
             }

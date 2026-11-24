@@ -821,11 +821,30 @@ namespace SLTtechSoft
         private void RemovePictures(List<LaserScanImageParameter> pictures)
         {
             if (pictures == null || pictures.Count == 0) return;
+            HashSet<string> removedImageIds = new HashSet<string>(
+                pictures.Where(p => !string.IsNullOrWhiteSpace(p.Id)).Select(p => p.Id),
+                StringComparer.OrdinalIgnoreCase);
+
             foreach (LaserScanImageParameter picture in pictures)
             {
                 CurrentParameters.ScanImages.Remove(picture);
                 DeleteModelPictureFile(picture);
             }
+
+            foreach (MarkingItem item in markings.Where(x => removedImageIds.Contains(x.ImageId ?? "")).ToList())
+            {
+                if (item.View != null) imageViewport.Controls.Remove(item.View);
+                markings.Remove(item);
+                selectedMarkings.Remove(item);
+                if (selectedMarking == item) selectedMarking = null;
+            }
+            foreach (FiducialItem item in fiducials.Where(x => removedImageIds.Contains(x.ImageId ?? "")).ToList())
+            {
+                if (item.View != null) markingImage.Controls.Remove(item.View);
+                fiducials.Remove(item);
+            }
+            RebuildMarkingList();
+            RefreshFiducialRows();
 
             SaveCurrentSurfaceToMemory();
             RefreshPictureGrid();
@@ -1679,10 +1698,27 @@ namespace SLTtechSoft
         private void ClampPosition(MarkingItem item)
         {
             if (markingImage.Image == null) return;
+            if (!string.IsNullOrWhiteSpace(item.ImageId))
+            {
+                ImageTileInfo tile = FindImageTile(item.ImageId);
+                if (tile != null)
+                {
+                    item.Position = new PointF(Math.Max(tile.DisplayBounds.Left, Math.Min(tile.DisplayBounds.Right, item.Position.X)),
+                                               Math.Max(tile.DisplayBounds.Top, Math.Min(tile.DisplayBounds.Bottom, item.Position.Y)));
+                    item.LocalPosition = CanvasToSource(item.ImageId, item.Position);
+                    item.LocalPosition = new PointF(Math.Max(0, Math.Min(tile.SourceWidth, item.LocalPosition.X)),
+                                                    Math.Max(0, Math.Min(tile.SourceHeight, item.LocalPosition.Y)));
+                    item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+                    return;
+                }
+            }
             item.Position = new PointF(Math.Max(0, Math.Min(markingImage.Image.Width, item.Position.X)), Math.Max(0, Math.Min(markingImage.Image.Height, item.Position.Y)));
         }
 
-        private static string FormatCoordinate(float value) { return value.ToString("0.00"); }
+        private static string FormatCoordinate(float value)
+        {
+            return float.IsNaN(value) || float.IsInfinity(value) ? "" : value.ToString("0.00");
+        }
 
         // Image-local source pixels are the persistent coordinates for each image.
         // Servo X/Y identify the image centre at capture time; ImagePixelToMM is the sole scale.
@@ -1716,7 +1752,7 @@ namespace SLTtechSoft
                 .FirstOrDefault(x => string.Equals(x.Id, imageId, StringComparison.OrdinalIgnoreCase));
             ImageTileInfo tile = FindImageTile(imageId);
             if (picture == null || tile == null || !picture.ServoX.HasValue || !picture.ServoY.HasValue)
-                return new PointF(ToMillimeter(sourcePixel.X), ToMillimeter(sourcePixel.Y));
+                return new PointF(float.NaN, float.NaN);
 
             double mmPerPixel = Math.Max(0.0000001, CurrentParameters.ImagePixelToMM);
             PointF center = TransformServoAxes(picture.ServoX.Value, picture.ServoY.Value);
@@ -2296,7 +2332,26 @@ namespace SLTtechSoft
         }
 
         private void UpdateAllFiducialViews() { foreach (FiducialItem item in fiducials) UpdateFiducialView(item); }
-        private void ClampFiducial(FiducialItem item) { if (markingImage.Image != null) item.Position = new PointF(Math.Max(0, Math.Min(markingImage.Image.Width, item.Position.X)), Math.Max(0, Math.Min(markingImage.Image.Height, item.Position.Y))); }
+        private void ClampFiducial(FiducialItem item)
+        {
+            if (markingImage.Image == null) return;
+            if (!string.IsNullOrWhiteSpace(item.ImageId))
+            {
+                ImageTileInfo tile = FindImageTile(item.ImageId);
+                if (tile != null)
+                {
+                    item.Position = new PointF(Math.Max(tile.DisplayBounds.Left, Math.Min(tile.DisplayBounds.Right, item.Position.X)),
+                                               Math.Max(tile.DisplayBounds.Top, Math.Min(tile.DisplayBounds.Bottom, item.Position.Y)));
+                    item.LocalPosition = CanvasToSource(item.ImageId, item.Position);
+                    item.LocalPosition = new PointF(Math.Max(0, Math.Min(tile.SourceWidth, item.LocalPosition.X)),
+                                                    Math.Max(0, Math.Min(tile.SourceHeight, item.LocalPosition.Y)));
+                    item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+                    return;
+                }
+            }
+            item.Position = new PointF(Math.Max(0, Math.Min(markingImage.Image.Width, item.Position.X)),
+                                       Math.Max(0, Math.Min(markingImage.Image.Height, item.Position.Y)));
+        }
         private void UpdateFiducialRow(FiducialItem item)
         {
             PointF servoPosition = GetFiducialCoordinates(item);

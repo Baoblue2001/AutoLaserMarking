@@ -1249,8 +1249,10 @@ namespace SLTtechSoft
                         }
 
                         parameters.HasStitchCoordinateSystem = true;
-                        parameters.StitchOriginX = minX;
-                        parameters.StitchOriginY = maxY;
+                        // The stitched bitmap includes a visual margin around the machine-coordinate bounds.
+                        // Shift the stored origin so canvas pixel (0,0) still maps to the correct machine point.
+                        parameters.StitchOriginX = minX - margin / pixelsPerMM;
+                        parameters.StitchOriginY = maxY + margin / pixelsPerMM;
                         parameters.StitchPixelToMM = 1.0 / pixelsPerMM;
 
                         if (surface == currentSurface)

@@ -1257,7 +1257,6 @@ namespace SLTtechSoft
                 Type = type,
                 PrintType = printType,
                 Content = content ?? "",
-                Position = position,
                 Rotate = Rotate
             };
             nextMarkingId = Math.Max(nextMarkingId, id + 1);

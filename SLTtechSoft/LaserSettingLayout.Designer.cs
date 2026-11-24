@@ -343,8 +343,8 @@ namespace SLTtechSoft
             // 
             this.imagePanel.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(157)))), ((int)(((byte)(184)))), ((int)(((byte)(211)))));
             this.imagePanel.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
-            this.imagePanel.Controls.Add(this.imageTools);
             this.imagePanel.Controls.Add(this.imageViewport);
+            this.imagePanel.Controls.Add(this.imageTools);
             this.imagePanel.Dock = System.Windows.Forms.DockStyle.Fill;
             this.imagePanel.Location = new System.Drawing.Point(0, 0);
             this.imagePanel.Name = "imagePanel";

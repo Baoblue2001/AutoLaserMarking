@@ -767,6 +767,7 @@ namespace SLTtechSoft
 
                         CurrentParameters.ScanImages.Add(new LaserScanImageParameter
                         {
+                            Id = Guid.NewGuid().ToString("N"),
                             ImagePath = Path.Combine(relativeFolder, fileName),
                             ServoX = null,
                             ServoY = null,

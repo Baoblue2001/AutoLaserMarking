@@ -35,8 +35,8 @@ namespace SLTtechSoft
     public class LaserScanImageParameter
     {
         public string ImagePath = "";
-        public int ServoX;
-        public int ServoY;
+        public double? ServoX;
+        public double? ServoY;
         public DateTime CaptureTime;
     }
 

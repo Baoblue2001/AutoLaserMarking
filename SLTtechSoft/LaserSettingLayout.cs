@@ -1384,7 +1384,8 @@ namespace SLTtechSoft
             if (point.X < 0 || point.Y < 0 || point.X > markingImage.Width || point.Y > markingImage.Height) return false;
             canvasPoint = new PointF(point.X / imageZoom, point.Y / imageZoom);
 
-            ImageTileInfo tile = imageTiles.FirstOrDefault(x => x.DisplayBounds.Contains(canvasPoint));
+            PointF lookupPoint = canvasPoint;
+            ImageTileInfo tile = imageTiles.FirstOrDefault(x => x.DisplayBounds.Contains(lookupPoint));
             if (tile == null) return false;
 
             imageId = tile.ImageId;

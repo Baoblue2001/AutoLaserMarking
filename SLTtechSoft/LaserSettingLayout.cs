@@ -2309,11 +2309,12 @@ namespace SLTtechSoft
         private void ApplyZoomAt(Point viewportPoint, float imageX, float imageY, float newZoom)
         {
             imageZoom = newZoom;
-            UpdateImageTransform();
 
             // Keep the image pixel under the cursor at exactly the same viewport position.
-            int baseLeft = (imageViewport.ClientSize.Width - markingImage.Width) / 2;
-            int baseTop = (imageViewport.ClientSize.Height - markingImage.Height) / 2;
+            int scaledWidth = Math.Max(100, (int)(markingImage.Image.Width * imageZoom));
+            int scaledHeight = Math.Max(100, (int)(markingImage.Image.Height * imageZoom));
+            int baseLeft = (imageViewport.ClientSize.Width - scaledWidth) / 2;
+            int baseTop = (imageViewport.ClientSize.Height - scaledHeight) / 2;
             imagePan = new Point(
                 (int)Math.Round(viewportPoint.X - imageX * imageZoom - baseLeft),
                 (int)Math.Round(viewportPoint.Y - imageY * imageZoom - baseTop));

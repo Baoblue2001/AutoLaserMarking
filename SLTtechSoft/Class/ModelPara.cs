@@ -45,6 +45,9 @@ namespace SLTtechSoft
 
     public class LaserScanImageParameter
     {
+        // Stable identity keeps Marking/Fiducial references attached to the source image,
+        // even when the preview contact sheet is rebuilt or its tiles are reordered.
+        public string Id = Guid.NewGuid().ToString("N");
         public string ImagePath = "";
         public double? ServoX;
         public double? ServoY;
@@ -54,11 +57,14 @@ namespace SLTtechSoft
     public class LaserMarkingParameter
     {
         public int Id;
+        public string ImageId = "";
         public string Product = "0";
         public string Type = "QR";
         public string PrintType = "QR";
         public string Content = "";
         public string Rotate = "";
+        // For ImageId-backed items, PositionX/Y are source-image pixels relative to that image.
+        // Empty ImageId preserves the legacy stitched-image pixel coordinate format.
         public double PositionX;
         public double PositionY;
     }
@@ -66,6 +72,9 @@ namespace SLTtechSoft
     public class LaserFiducialParameter
     {
         public int Id;
+        public string ImageId = "";
+        // For ImageId-backed items, PositionX/Y are source-image pixels relative to that image.
+        // Empty ImageId preserves the legacy stitched-image pixel coordinate format.
         public double PositionX;
         public double PositionY;
     }

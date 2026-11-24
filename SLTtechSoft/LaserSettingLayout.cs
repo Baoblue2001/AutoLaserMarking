@@ -1601,7 +1601,7 @@ namespace SLTtechSoft
         private void PositionValueChanged(object sender, EventArgs e)
         {
             if (updatingPositionControls || selectedMarking == null || !positionX.Focused && !positionY.Focused) return;
-            selectedMarking.Position = MachineToImagePixel((float)positionX.Value, (float)positionY.Value);
+            SetMarkingMachineCoordinates(selectedMarking, (float)positionX.Value, (float)positionY.Value);
             ClampPosition(selectedMarking);
             UpdateMarkingView(selectedMarking);
             UpdateMarkingRow(selectedMarking);
@@ -1613,7 +1613,7 @@ namespace SLTtechSoft
             updatingPositionControls = true;
             try
             {
-                PointF machinePosition = GetMarkingCoordinates(item.Position);
+                PointF machinePosition = GetMarkingCoordinates(item);
                 positionX.Value = ClampValue(positionX, machinePosition.X);
                 positionY.Value = ClampValue(positionY, machinePosition.Y);
                 SelectPrintType(item.PrintType);
@@ -1668,36 +1668,118 @@ namespace SLTtechSoft
 
         private static string FormatCoordinate(float value) { return value.ToString("0.00"); }
 
-        // Marking and Fiducial use the same image-to-machine coordinate transform.
-        // For a physically stitched image, the stitch origin is the machine-coordinate origin.
+        // Image-local source pixels are the persistent coordinates for each image.
+        // Servo X/Y identify the image centre at capture time; ImagePixelToMM is the sole scale.
+        private PointF TransformServoAxes(double x, double y)
+        {
+            LaserSurfaceParameter parameters = CurrentParameters;
+            if (parameters.EnableServoAxisTransform)
+            {
+                if (parameters.SwapServoAxes) { double temp = x; x = y; y = temp; }
+                if (parameters.ReverseServoX) x = -x;
+                if (parameters.ReverseServoY) y = -y;
+            }
+            return new PointF((float)x, (float)y);
+        }
+
+        private PointF InverseTransformServoAxes(double x, double y)
+        {
+            LaserSurfaceParameter parameters = CurrentParameters;
+            if (parameters.EnableServoAxisTransform)
+            {
+                if (parameters.ReverseServoX) x = -x;
+                if (parameters.ReverseServoY) y = -y;
+                if (parameters.SwapServoAxes) { double temp = x; x = y; y = temp; }
+            }
+            return new PointF((float)x, (float)y);
+        }
+
+        private PointF GetImageMachineCoordinates(string imageId, PointF sourcePixel)
+        {
+            LaserScanImageParameter picture = (CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
+                .FirstOrDefault(x => string.Equals(x.Id, imageId, StringComparison.OrdinalIgnoreCase));
+            ImageTileInfo tile = FindImageTile(imageId);
+            if (picture == null || tile == null || !picture.ServoX.HasValue || !picture.ServoY.HasValue)
+                return new PointF(ToMillimeter(sourcePixel.X), ToMillimeter(sourcePixel.Y));
+
+            double mmPerPixel = Math.Max(0.0000001, CurrentParameters.ImagePixelToMM);
+            PointF center = TransformServoAxes(picture.ServoX.Value, picture.ServoY.Value);
+            PointF offset = TransformServoAxes(
+                (sourcePixel.X - tile.SourceWidth / 2.0) * mmPerPixel,
+                -(sourcePixel.Y - tile.SourceHeight / 2.0) * mmPerPixel);
+            return new PointF(center.X + offset.X, center.Y + offset.Y);
+        }
+
+        private PointF MachineToImageSourcePixel(string imageId, float machineX, float machineY)
+        {
+            LaserScanImageParameter picture = (CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
+                .FirstOrDefault(x => string.Equals(x.Id, imageId, StringComparison.OrdinalIgnoreCase));
+            ImageTileInfo tile = FindImageTile(imageId);
+            if (picture == null || tile == null || !picture.ServoX.HasValue || !picture.ServoY.HasValue)
+                return new PointF(ToPixel(machineX), ToPixel(machineY));
+
+            double mmPerPixel = Math.Max(0.0000001, CurrentParameters.ImagePixelToMM);
+            PointF center = TransformServoAxes(picture.ServoX.Value, picture.ServoY.Value);
+            PointF offset = InverseTransformServoAxes(machineX - center.X, machineY - center.Y);
+            return new PointF((float)(tile.SourceWidth / 2.0 + offset.X / mmPerPixel),
+                              (float)(tile.SourceHeight / 2.0 - offset.Y / mmPerPixel));
+        }
+
+        private PointF GetMarkingCoordinates(MarkingItem item)
+        {
+            if (item == null) return PointF.Empty;
+            return string.IsNullOrWhiteSpace(item.ImageId)
+                ? GetMarkingCoordinates(item.Position)
+                : GetImageMachineCoordinates(item.ImageId, item.LocalPosition);
+        }
+
+        private PointF GetFiducialCoordinates(FiducialItem item)
+        {
+            if (item == null) return PointF.Empty;
+            return string.IsNullOrWhiteSpace(item.ImageId)
+                ? GetMarkingCoordinates(item.Position)
+                : GetImageMachineCoordinates(item.ImageId, item.LocalPosition);
+        }
+
+        private void SetMarkingMachineCoordinates(MarkingItem item, float machineX, float machineY)
+        {
+            if (item == null) return;
+            if (string.IsNullOrWhiteSpace(item.ImageId))
+            {
+                item.Position = MachineToImagePixel(machineX, machineY);
+                return;
+            }
+            item.LocalPosition = MachineToImageSourcePixel(item.ImageId, machineX, machineY);
+            item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+        }
+
+        private void SetFiducialMachineCoordinates(FiducialItem item, float machineX, float machineY)
+        {
+            if (item == null) return;
+            if (string.IsNullOrWhiteSpace(item.ImageId))
+            {
+                item.Position = MachineToImagePixel(machineX, machineY);
+                return;
+            }
+            item.LocalPosition = MachineToImageSourcePixel(item.ImageId, machineX, machineY);
+            item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+        }
+
         private PointF GetMarkingCoordinates(PointF imagePixel)
         {
             LaserSurfaceParameter parameters = CurrentParameters;
             if (parameters.HasStitchCoordinateSystem && parameters.StitchPixelToMM > 0)
-            {
-                return new PointF(
-                    (float)(parameters.StitchOriginX + imagePixel.X * parameters.StitchPixelToMM),
-                    (float)(parameters.StitchOriginY - imagePixel.Y * parameters.StitchPixelToMM));
-            }
-
+                return new PointF((float)(parameters.StitchOriginX + imagePixel.X * parameters.StitchPixelToMM),
+                                  (float)(parameters.StitchOriginY - imagePixel.Y * parameters.StitchPixelToMM));
             return new PointF(ToMillimeter(imagePixel.X), ToMillimeter(imagePixel.Y));
-        }
-
-        private PointF GetFiducialCoordinates(PointF imagePixel)
-        {
-            return GetMarkingCoordinates(imagePixel);
         }
 
         private PointF MachineToImagePixel(float machineX, float machineY)
         {
             LaserSurfaceParameter parameters = CurrentParameters;
             if (parameters.HasStitchCoordinateSystem && parameters.StitchPixelToMM > 0)
-            {
-                return new PointF(
-                    (float)((machineX - parameters.StitchOriginX) / parameters.StitchPixelToMM),
-                    (float)((parameters.StitchOriginY - machineY) / parameters.StitchPixelToMM));
-            }
-
+                return new PointF((float)((machineX - parameters.StitchOriginX) / parameters.StitchPixelToMM),
+                                  (float)((parameters.StitchOriginY - machineY) / parameters.StitchPixelToMM));
             return new PointF(ToPixel(machineX), ToPixel(machineY));
         }
 
@@ -1729,11 +1811,11 @@ namespace SLTtechSoft
                 return;
             }
 
-            PointF machine = GetMarkingCoordinates(item.Position);
+            PointF machine = GetMarkingCoordinates(item);
             if (column == "X") machine.X = value;
             else machine.Y = value;
 
-            item.Position = MachineToImagePixel(machine.X, machine.Y);
+            SetMarkingMachineCoordinates(item, machine.X, machine.Y);
             ClampPosition(item);
             UpdateMarkingView(item);
             UpdatePositionControls(item);
@@ -1755,11 +1837,11 @@ namespace SLTtechSoft
                 return;
             }
 
-            PointF machine = GetFiducialCoordinates(item.Position);
+            PointF machine = GetFiducialCoordinates(item);
             if (e.ColumnIndex == 1) machine.X = value;
             else machine.Y = value;
 
-            item.Position = MachineToImagePixel(machine.X, machine.Y);
+            SetFiducialMachineCoordinates(item, machine.X, machine.Y);
             ClampFiducial(item);
             UpdateFiducialView(item);
             UpdateFiducialRow(item);

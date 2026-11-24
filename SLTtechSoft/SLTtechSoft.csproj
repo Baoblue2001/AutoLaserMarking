@@ -238,7 +238,7 @@
       <DependentUpon>FormOption.cs</DependentUpon>
     </Compile>
     <Compile Include="LaserSettingLayout.cs">
-      <SubType>Form</SubType>
+      <SubType>Component</SubType>
     </Compile>
     <Compile Include="LaserSettingLayout.Designer.cs">
       <DependentUpon>LaserSettingLayout.cs</DependentUpon>

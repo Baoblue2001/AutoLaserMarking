@@ -486,7 +486,7 @@ namespace SLTtechSoft
             if (ModelNo < 0 || ModelNo >= modelTable.Table.Rows.Count || modelTable.Table.Rows[ModelNo].IsNewRow) return;
             LoadAModel(ModelNo);
             string path = currentModelInfomation.PathFileModel;
-          
+            SaveCurrentModelInfomation(true);
         }
         private void ModelTalbeDelete_Click(object sender, EventArgs e)
         {

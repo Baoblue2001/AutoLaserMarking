@@ -88,6 +88,10 @@
             this.label22 = new System.Windows.Forms.Label();
             this.lbScannerConected = new System.Windows.Forms.Label();
             this.label25 = new System.Windows.Forms.Label();
+            this.panel9 = new System.Windows.Forms.Panel();
+            this.label3 = new System.Windows.Forms.Label();
+            this.label7 = new System.Windows.Forms.Label();
+            this.lblPrinterConnection = new System.Windows.Forms.Label();
             this.panel18 = new System.Windows.Forms.Panel();
             this.label8 = new System.Windows.Forms.Label();
             this.lbProcessStepNo = new System.Windows.Forms.Label();
@@ -103,10 +107,6 @@
             this.btnIO = new System.Windows.Forms.Button();
             this.btnOption = new System.Windows.Forms.Button();
             this.timer1 = new System.Windows.Forms.Timer(this.components);
-            this.panel9 = new System.Windows.Forms.Panel();
-            this.label3 = new System.Windows.Forms.Label();
-            this.label7 = new System.Windows.Forms.Label();
-            this.lblPrinterConnection = new System.Windows.Forms.Label();
             this.panel1.SuspendLayout();
             this.panel3.SuspendLayout();
             this.panel4.SuspendLayout();
@@ -119,11 +119,11 @@
             this.panelCam3.SuspendLayout();
             this.panelCam4.SuspendLayout();
             this.panelScanner.SuspendLayout();
+            this.panel9.SuspendLayout();
             this.panel18.SuspendLayout();
             this.panel2.SuspendLayout();
             this.panel5.SuspendLayout();
             this.flowLayoutPanel1.SuspendLayout();
-            this.panel9.SuspendLayout();
             this.SuspendLayout();
             // 
             // panel1
@@ -802,6 +802,51 @@
             this.label25.TabIndex = 19;
             this.label25.Text = "SCANNER";
             // 
+            // panel9
+            // 
+            this.panel9.Controls.Add(this.label3);
+            this.panel9.Controls.Add(this.label7);
+            this.panel9.Controls.Add(this.lblPrinterConnection);
+            this.panel9.Location = new System.Drawing.Point(1132, 0);
+            this.panel9.Margin = new System.Windows.Forms.Padding(0);
+            this.panel9.Name = "panel9";
+            this.panel9.Size = new System.Drawing.Size(116, 40);
+            this.panel9.TabIndex = 46;
+            this.panel9.Visible = false;
+            // 
+            // label3
+            // 
+            this.label3.BackColor = System.Drawing.Color.White;
+            this.label3.Dock = System.Windows.Forms.DockStyle.Left;
+            this.label3.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.label3.Location = new System.Drawing.Point(0, 0);
+            this.label3.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
+            this.label3.Name = "label3";
+            this.label3.Size = new System.Drawing.Size(5, 40);
+            this.label3.TabIndex = 22;
+            // 
+            // label7
+            // 
+            this.label7.BackColor = System.Drawing.Color.IndianRed;
+            this.label7.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.label7.Location = new System.Drawing.Point(7, 1);
+            this.label7.Margin = new System.Windows.Forms.Padding(6);
+            this.label7.Name = "label7";
+            this.label7.Size = new System.Drawing.Size(15, 16);
+            this.label7.TabIndex = 18;
+            this.label7.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
+            // 
+            // lblPrinterConnection
+            // 
+            this.lblPrinterConnection.AutoSize = true;
+            this.lblPrinterConnection.Font = new System.Drawing.Font("Segoe UI", 8.25F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.lblPrinterConnection.Location = new System.Drawing.Point(25, 3);
+            this.lblPrinterConnection.Margin = new System.Windows.Forms.Padding(6);
+            this.lblPrinterConnection.Name = "lblPrinterConnection";
+            this.lblPrinterConnection.Size = new System.Drawing.Size(42, 13);
+            this.lblPrinterConnection.TabIndex = 19;
+            this.lblPrinterConnection.Text = "Printer";
+            // 
             // panel18
             // 
             this.panel18.Controls.Add(this.label8);
@@ -979,51 +1024,6 @@
             // 
             this.timer1.Tick += new System.EventHandler(this.timer1_Tick);
             // 
-            // panel9
-            // 
-            this.panel9.Controls.Add(this.label3);
-            this.panel9.Controls.Add(this.label7);
-            this.panel9.Controls.Add(this.lblPrinterConnection);
-            this.panel9.Location = new System.Drawing.Point(1132, 0);
-            this.panel9.Margin = new System.Windows.Forms.Padding(0);
-            this.panel9.Name = "panel9";
-            this.panel9.Size = new System.Drawing.Size(116, 40);
-            this.panel9.TabIndex = 46;
-            this.panel9.Visible = false;
-            // 
-            // label3
-            // 
-            this.label3.BackColor = System.Drawing.Color.White;
-            this.label3.Dock = System.Windows.Forms.DockStyle.Left;
-            this.label3.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.label3.Location = new System.Drawing.Point(0, 0);
-            this.label3.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
-            this.label3.Name = "label3";
-            this.label3.Size = new System.Drawing.Size(5, 40);
-            this.label3.TabIndex = 22;
-            // 
-            // label7
-            // 
-            this.label7.BackColor = System.Drawing.Color.IndianRed;
-            this.label7.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            this.label7.Location = new System.Drawing.Point(7, 1);
-            this.label7.Margin = new System.Windows.Forms.Padding(6);
-            this.label7.Name = "label7";
-            this.label7.Size = new System.Drawing.Size(15, 16);
-            this.label7.TabIndex = 18;
-            this.label7.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
-            // 
-            // lblPrinterConnection
-            // 
-            this.lblPrinterConnection.AutoSize = true;
-            this.lblPrinterConnection.Font = new System.Drawing.Font("Segoe UI", 8.25F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.lblPrinterConnection.Location = new System.Drawing.Point(25, 3);
-            this.lblPrinterConnection.Margin = new System.Windows.Forms.Padding(6);
-            this.lblPrinterConnection.Name = "lblPrinterConnection";
-            this.lblPrinterConnection.Size = new System.Drawing.Size(42, 13);
-            this.lblPrinterConnection.TabIndex = 19;
-            this.lblPrinterConnection.Text = "Printer";
-            // 
             // Form1
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
@@ -1059,14 +1059,14 @@
             this.panelCam4.PerformLayout();
             this.panelScanner.ResumeLayout(false);
             this.panelScanner.PerformLayout();
+            this.panel9.ResumeLayout(false);
+            this.panel9.PerformLayout();
             this.panel18.ResumeLayout(false);
             this.panel18.PerformLayout();
             this.panel2.ResumeLayout(false);
             this.panel5.ResumeLayout(false);
             this.panel5.PerformLayout();
             this.flowLayoutPanel1.ResumeLayout(false);
-            this.panel9.ResumeLayout(false);
-            this.panel9.PerformLayout();
             this.ResumeLayout(false);
 
         }

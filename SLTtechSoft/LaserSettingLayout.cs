@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -20,6 +21,10 @@ namespace SLTtechSoft
     {
         public BufferedViewportPanel()
         {
+            // Keep the Visual Studio designer on the standard Panel implementation.
+            if (LicenseManager.UsageMode == LicenseUsageMode.Designtime)
+                return;
+
             SetStyle(ControlStyles.UserPaint |
                      ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.OptimizedDoubleBuffer |
@@ -32,7 +37,8 @@ namespace SLTtechSoft
             get
             {
                 CreateParams cp = base.CreateParams;
-                cp.ExStyle |= 0x02000000; // WS_EX_COMPOSITED
+                if (LicenseManager.UsageMode != LicenseUsageMode.Designtime)
+                    cp.ExStyle |= 0x02000000; // WS_EX_COMPOSITED
                 return cp;
             }
         }
@@ -254,6 +260,13 @@ namespace SLTtechSoft
         public LaserSettingLayout()
         {
             InitializeComponent();
+
+            // The designer only needs the serialized control tree. Keep runtime-only
+            // setup out of its loading path to avoid design-time extender failures.
+            if (LicenseManager.UsageMode == LicenseUsageMode.Designtime)
+                return;
+
+            ConfigureZoomToolbarOverlay();
             KeyPreview = true;
             zoomAnimationTimer = new Timer { Interval = 15 };
             zoomAnimationTimer.Tick += ZoomAnimationTick;
@@ -325,6 +338,16 @@ namespace SLTtechSoft
             Image oldImage = markingImage.Image;
             markingImage.Image = null;
             if (oldImage != null) oldImage.Dispose();
+        }
+
+        private void ConfigureZoomToolbarOverlay()
+        {
+            // Keep zoom controls outside the scrollable/pannable canvas at runtime.
+            imageTools.Parent = imagePanel;
+            imageTools.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            imageTools.Location = new Point(
+                Math.Max(0, imagePanel.ClientSize.Width - imageTools.Width - 5), 5);
+            imageTools.BringToFront();
         }
 
         private void ConfigureImageViewport()

@@ -1737,7 +1737,18 @@ namespace SLTtechSoft
 
         private void UpdatePositionControls(MarkingItem item)
         {
+            bool hasMachineOrigin = item == null || string.IsNullOrWhiteSpace(item.ImageId);
+            if (item != null && !string.IsNullOrWhiteSpace(item.ImageId))
+            {
+                LaserScanImageParameter picture = (CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
+                    .FirstOrDefault(x => string.Equals(x.Id, item.ImageId, StringComparison.OrdinalIgnoreCase));
+                hasMachineOrigin = picture != null && picture.ServoX.HasValue && picture.ServoY.HasValue;
+            }
+
+            positionX.Enabled = hasMachineOrigin;
+            positionY.Enabled = hasMachineOrigin;
             if (item == null) return;
+
             updatingPositionControls = true;
             try
             {

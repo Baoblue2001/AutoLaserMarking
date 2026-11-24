@@ -374,6 +374,7 @@ namespace SLTtechSoft
             savedTopParameters = CloneSurface(topParameters);
             savedBotParameters = CloneSurface(botParameters);
             currentSurface = LaserSurface.Top;
+            ListPicture.Text = "Picture - TOP";
             RebuildSurfaceImage(LaserSurface.Top);
             RebuildSurfaceImage(LaserSurface.Bot);
             btnTop.BackColor = Color.LightGreen;
@@ -434,6 +435,7 @@ namespace SLTtechSoft
         {
             SaveCurrentSurfaceToMemory();
             currentSurface = surface;
+            ListPicture.Text = surface == LaserSurface.Top ? "Picture - TOP" : "Picture - BOT";
             RebuildSurfaceImage(surface);
             btnTop.BackColor = surface == LaserSurface.Top ? Color.LightGreen : Color.WhiteSmoke;
             btnBot.BackColor = surface == LaserSurface.Bot ? Color.LightGreen : Color.WhiteSmoke;

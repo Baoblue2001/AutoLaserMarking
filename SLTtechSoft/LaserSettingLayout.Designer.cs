@@ -344,7 +344,6 @@ namespace SLTtechSoft
             this.imagePanel.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(157)))), ((int)(((byte)(184)))), ((int)(((byte)(211)))));
             this.imagePanel.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
             this.imagePanel.Controls.Add(this.imageViewport);
-            this.imagePanel.Controls.Add(this.imageTools);
             this.imagePanel.Dock = System.Windows.Forms.DockStyle.Fill;
             this.imagePanel.Location = new System.Drawing.Point(0, 0);
             this.imagePanel.Name = "imagePanel";
@@ -356,6 +355,7 @@ namespace SLTtechSoft
             this.imageViewport.AutoScroll = true;
             this.imageViewport.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(65)))), ((int)(((byte)(65)))), ((int)(((byte)(65)))));
             this.imageViewport.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
+            this.imageViewport.Controls.Add(this.imageTools);
             this.imageViewport.Controls.Add(this.markingImage);
             this.imageViewport.Dock = System.Windows.Forms.DockStyle.Fill;
             this.imageViewport.Location = new System.Drawing.Point(0, 0);
@@ -370,7 +370,6 @@ namespace SLTtechSoft
             this.imageTools.Controls.Add(this.zoomOut);
             this.imageTools.Controls.Add(this.zoomIn);
             this.imageTools.Controls.Add(this.zoomLabel);
-            this.imageTools.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
             this.imageTools.Location = new System.Drawing.Point(520, 1);
             this.imageTools.Name = "imageTools";
             this.imageTools.Size = new System.Drawing.Size(130, 28);

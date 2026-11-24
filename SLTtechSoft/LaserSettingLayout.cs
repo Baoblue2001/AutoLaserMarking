@@ -14,36 +14,6 @@ using QRCoder;
 
 namespace SLTtechSoft
 {
-    // Double-buffer the viewport and its child controls as one visual surface.
-    // This prevents the image and floating marking labels from leaving paint trails
-    // while the viewport is being panned.
-    internal sealed class BufferedViewportPanel : Panel
-    {
-        public BufferedViewportPanel()
-        {
-            // Keep the Visual Studio designer on the standard Panel implementation.
-            if (LicenseManager.UsageMode == LicenseUsageMode.Designtime)
-                return;
-
-            SetStyle(ControlStyles.UserPaint |
-                     ControlStyles.AllPaintingInWmPaint |
-                     ControlStyles.OptimizedDoubleBuffer |
-                     ControlStyles.ResizeRedraw, true);
-            UpdateStyles();
-        }
-
-        protected override CreateParams CreateParams
-        {
-            get
-            {
-                CreateParams cp = base.CreateParams;
-                if (LicenseManager.UsageMode != LicenseUsageMode.Designtime)
-                    cp.ExStyle |= 0x02000000; // WS_EX_COMPOSITED
-                return cp;
-            }
-        }
-    }
-
     public partial class LaserSettingLayout : Form
     {
         public event EventHandler SaveAllRequested;
@@ -261,12 +231,11 @@ namespace SLTtechSoft
         {
             InitializeComponent();
 
-            // The designer only needs the serialized control tree. Keep runtime-only
-            // setup out of its loading path to avoid design-time extender failures.
-            if (LicenseManager.UsageMode == LicenseUsageMode.Designtime)
-                return;
+            // Keep the zoom controls as an overlay at runtime; leave their
+            // designer parentage intact while the form is being edited.
+            if (LicenseManager.UsageMode != LicenseUsageMode.Designtime)
+                ConfigureZoomToolbarOverlay();
 
-            ConfigureZoomToolbarOverlay();
             KeyPreview = true;
             zoomAnimationTimer = new Timer { Interval = 15 };
             zoomAnimationTimer.Tick += ZoomAnimationTick;

@@ -41,6 +41,10 @@ namespace SLTtechSoft
 
         // Each scanned image has its own servo position; image paths are relative to the model folder.
         public List<LaserScanImageParameter> ScanImages = new List<LaserScanImageParameter>();
+
+        // Version 1 stores ImageId-backed Marking/Fiducial positions as source-image pixels.
+        // Older spatial-stitch builds accidentally stored normalized 0..1 coordinates.
+        public int ImageLocalCoordinateVersion = 0;
     }
 
     public class LaserScanImageParameter

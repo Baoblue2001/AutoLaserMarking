@@ -240,9 +240,13 @@
     <Compile Include="FormOption.Designer.cs">
       <DependentUpon>FormOption.cs</DependentUpon>
     </Compile>
+<<<<<<< HEAD
     <Compile Include="BufferedViewportPanel.cs">
       <SubType>Component</SubType>
     </Compile>
+=======
+    <Compile Include="BufferedViewportPanel.cs" />
+>>>>>>> 35603ff4d8c4ea388d99aaaa17958fb04930880e
     <Compile Include="FrmVisionFileSetup.cs">
       <SubType>UserControl</SubType>
     </Compile>

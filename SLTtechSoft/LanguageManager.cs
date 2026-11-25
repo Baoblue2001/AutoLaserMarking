@@ -71,7 +71,7 @@ namespace SLTtechSoft
             Add("COUNT", "ĐẾM", "수량");
             Add("CAM 1 - RESULT", "KẾT QUẢ CAM 1", "CAM 1 결과");
 
-            Add("Run\\nOnce", "Chạy một lần", "한 번 실행");
+            Add("Run\nOnce", "Chạy một lần", "한 번 실행");
             Add("Use Image Setting", "Dùng cài đặt ảnh", "이미지 설정 사용");
             Add("Use File", "Dùng file", "파일 사용");
             Add("Use Folder", "Dùng thư mục", "폴더 사용");

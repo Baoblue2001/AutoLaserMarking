@@ -20,6 +20,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using System.Windows;
 using System.Windows.Forms;
 using WindowsFormsApp1;
 using static SLTtechSoft.ModelTable;
@@ -46,7 +47,7 @@ namespace SLTtechSoft
         private void CheckFirstRun()
         {
 
-            DialogResult result = MessageBox.Show("Yes : Normal Machine Mode \nNo: Test Mode (No connect to PLC and Camera) \nCancel: Exit", "Mode Software", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            DialogResult result = System.Windows.Forms.MessageBox.Show("Yes : Normal Machine Mode \nNo: Test Mode (No connect to PLC and Camera) \nCancel: Exit", "Mode Software", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
 
             if (result == DialogResult.Yes)
             {
@@ -72,7 +73,7 @@ namespace SLTtechSoft
             {
                 if (bShowMessage)
                 {
-                    MessageBox.Show("Another process is running, Please End last process", "Warning", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    System.Windows.Forms.MessageBox.Show("Another process is running, Please End last process", "Warning", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
 
                 this.Close();
@@ -103,14 +104,14 @@ namespace SLTtechSoft
             pnLangue.Controls.Clear();
             pnLangue.BackgroundImage = null;
             pnLangue.BackColor = Color.FromArgb(214, 234, 248);
-            pnLangue.Size = new Size(170, 40);
+            pnLangue.Size = new System.Drawing.Size(170, 40);
             pnLangue.Cursor = Cursors.Hand;
 
             _languageFlag = new PictureBox
             {
                 Name = "picCurrentLanguage",
-                Location = new Point(8, 6),
-                Size = new Size(42, 28),
+                Location = new System.Drawing.Point(8, 6),
+                Size = new System.Drawing.Size(42, 28),
                 SizeMode = PictureBoxSizeMode.Zoom,
                 BackColor = Color.Transparent,
                 Cursor = Cursors.Hand
@@ -119,10 +120,10 @@ namespace SLTtechSoft
             _languageCaption = new Label
             {
                 Name = "lblCurrentLanguage",
-                Location = new Point(58, 0),
-                Size = new Size(106, 40),
+                Location = new System.Drawing.Point(58, 0),
+                Size = new System.Drawing.Size(106, 40),
                 TextAlign = ContentAlignment.MiddleLeft,
-                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                Font = new System.Drawing.Font("Segoe UI", 9.5f, System.Drawing.FontStyle.Bold),
                 ForeColor = Color.FromArgb(35, 45, 55),
                 BackColor = Color.Transparent,
                 Cursor = Cursors.Hand
@@ -133,8 +134,8 @@ namespace SLTtechSoft
 
             _languageMenu = new ContextMenuStrip
             {
-                ImageScalingSize = new Size(42, 28),
-                Font = new Font("Segoe UI", 10f)
+                ImageScalingSize = new System.Drawing.Size(42, 28),
+                Font = new System.Drawing.Font("Segoe UI", 10f)
             };
 
             AddLanguageMenuItem("Tiếng Việt", Properties.Resources.vietnam, AppLanguage.Vietnamese);
@@ -161,7 +162,7 @@ namespace SLTtechSoft
         private void LanguageSelector_Click(object sender, EventArgs e)
         {
             if (_languageMenu != null && pnLangue != null)
-                _languageMenu.Show(pnLangue, new Point(0, pnLangue.Height));
+                _languageMenu.Show(pnLangue, new System.Drawing.Point(0, pnLangue.Height));
         }
 
         private void ChangeLanguage(AppLanguage language, bool save)
@@ -342,7 +343,7 @@ namespace SLTtechSoft
         {
             if (_closingConfirmed) return;
 
-            DialogResult result = MessageBox.Show("Do you want close this application", "Close", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            DialogResult result = System.Windows.Forms.MessageBox.Show("Do you want close this application", "Close", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (result != DialogResult.Yes)
             {
                 e.Cancel = true;
@@ -2021,7 +2022,7 @@ namespace SLTtechSoft
                     if (bmp_img_Display == null) throw new Exception("VisionMaster display image is null.");
 
                     ImageShowFilmStip?.Dispose();
-                    ImageShowFilmStip = new Bitmap(bmp_img_Display);
+                    ImageShowFilmStip = new System.Drawing.Bitmap(bmp_img_Display);
                     bmp_img_Display.Dispose();
                     bmp_img_Display = null;
                 }
@@ -2071,7 +2072,7 @@ namespace SLTtechSoft
             {
                 //LOG
                 WriteLogPC(LogType.Main, "Scanner", "Connect Fail");
-                MessageBox.Show(ex.ToString(), "Scanner", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                System.Windows.Forms.MessageBox.Show(ex.ToString(), "Scanner", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
         public void ScannerDisconnect()
@@ -2519,7 +2520,7 @@ namespace SLTtechSoft
             catch (IOException ex)
             {
                 result = null;
-                MessageBox.Show(ex.ToString(), "Read Error List", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                System.Windows.Forms.MessageBox.Show(ex.ToString(), "Read Error List", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             return result;
         }

@@ -100,13 +100,13 @@
             this.panel2 = new System.Windows.Forms.Panel();
             this.panel5 = new System.Windows.Forms.Panel();
             this.lbl_Step_Name = new System.Windows.Forms.Label();
+            this.pnLangue = new System.Windows.Forms.Panel();
             this.flowLayoutPanel1 = new System.Windows.Forms.FlowLayoutPanel();
             this.btnMain = new System.Windows.Forms.Button();
             this.btnModel = new System.Windows.Forms.Button();
             this.btnIO = new System.Windows.Forms.Button();
             this.btnOption = new System.Windows.Forms.Button();
             this.timer1 = new System.Windows.Forms.Timer(this.components);
-            this.pnLangue = new System.Windows.Forms.Panel();
             this.panel1.SuspendLayout();
             this.panel3.SuspendLayout();
             this.panel4.SuspendLayout();
@@ -938,6 +938,16 @@
             this.lbl_Step_Name.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
             this.lbl_Step_Name.Visible = false;
             // 
+            // pnLangue
+            // 
+            this.pnLangue.BackgroundImage = global::SLTtechSoft.Properties.Resources.uploads_2022_th_c3_a1ng_208_ng_c3_a0y_31_nga_quockyvietnam_copy_7814;
+            this.pnLangue.BackgroundImageLayout = System.Windows.Forms.ImageLayout.Stretch;
+            this.pnLangue.Dock = System.Windows.Forms.DockStyle.Right;
+            this.pnLangue.Location = new System.Drawing.Point(955, 0);
+            this.pnLangue.Name = "pnLangue";
+            this.pnLangue.Size = new System.Drawing.Size(229, 40);
+            this.pnLangue.TabIndex = 0;
+            // 
             // flowLayoutPanel1
             // 
             this.flowLayoutPanel1.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(214)))), ((int)(((byte)(234)))), ((int)(((byte)(248)))));
@@ -1015,16 +1025,6 @@
             // timer1
             // 
             this.timer1.Tick += new System.EventHandler(this.timer1_Tick);
-            // 
-            // pnLangue
-            // 
-            this.pnLangue.BackgroundImage = global::SLTtechSoft.Properties.Resources.uploads_2022_th_c3_a1ng_208_ng_c3_a0y_31_nga_quockyvietnam_copy_7814;
-            this.pnLangue.BackgroundImageLayout = System.Windows.Forms.ImageLayout.Stretch;
-            this.pnLangue.Dock = System.Windows.Forms.DockStyle.Right;
-            this.pnLangue.Location = new System.Drawing.Point(955, 0);
-            this.pnLangue.Name = "pnLangue";
-            this.pnLangue.Size = new System.Drawing.Size(229, 40);
-            this.pnLangue.TabIndex = 0;
             // 
             // Form1
             // 

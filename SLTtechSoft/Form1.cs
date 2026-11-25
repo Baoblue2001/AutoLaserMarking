@@ -1389,6 +1389,9 @@ namespace SLTtechSoft
                 catch (Exception ex)
                 {
                     WriteLogPC(LogType.Vision, "Laser Setup Scan", ex.Message);
+                    // The pending request has already been consumed. Notify the caller so
+                    // Auto Scan cannot remain in its waiting state after a frame-processing error.
+                    try { scanCallback(null, 0, 0); } catch { }
                 }
                 finally
                 {

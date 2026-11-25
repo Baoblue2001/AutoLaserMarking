@@ -463,15 +463,16 @@ namespace SLTtechSoft
             string modelFile = currentModelInfomation.PathFileModel;
             if (string.IsNullOrWhiteSpace(modelFile) || !File.Exists(modelFile))
             {
-                MessageBox.Show("Please save the current Model before using Scan Image.", "Scan Image", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                onCaptured?.Invoke(null, 0, 0);
                 return;
             }
 
             laserSettingLayout.SetModelFolderPath(Path.GetDirectoryName(modelFile));
 
-            // Laser Setting currently stores its parameters in Cam[0], so use Camera 1.
+            // Laser Setting currently stores its parameters in Cam[0], so Manual and Auto
+            // receive the same failure notification through the shared scan callback.
             if (_form1 == null || !_form1.RequestLaserSetupCapture(0, onCaptured))
-                MessageBox.Show("Camera 1 is not ready, or another Scan Image request is still waiting for a frame.", "Scan Image", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                onCaptured?.Invoke(null, 0, 0);
         }
         private void ModelTalbeCall_Click(object sender, EventArgs e)
         {

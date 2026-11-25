@@ -39,6 +39,7 @@ namespace SLTtechSoft
             IsCamRunContinous = new bool[NumberOfCamera];
             IsLiveCam = new bool[NumberOfCamera];
             DataWritePLC = new ushort[NumberWritePLC];
+            DataWriteWPLC = new ushort[NumberWriteWPLC];
         }
      
         #region Check Last running proces
@@ -364,12 +365,16 @@ namespace SLTtechSoft
             PLC.Read.AutoBits.Add(PlcDic.StartMarkingProcess);
             PLC.Read.AutoBits.Add(PlcDic.MarkingStartConfirm);
             PLC.Read.AutoBits.Add(PlcDic.MarkingOneDone);
+            PLC.Read.AutoBits.Add(PlcDic.Require_CheckFiducial);
+            PLC.Read.AutoBits.Add(PlcDic.StartCheckFiducial);
+            PLC.Read.AutoBits.Add(PlcDic.Require_CheckCode);
+            PLC.Read.AutoBits.Add(PlcDic.StartCheckCode);
 
             PLC.Read.WordUshorts.Add(PlcDic.ModelNo);
             PLC.Read.WordIntegers.Add(PlcDic.CurentPosX);
             PLC.Read.WordIntegers.Add(PlcDic.CurentPosY);
 
-
+            //Write
             PLC.Write.AutoBits.Add(PlcDic.Auto);
             PLC.Write.AutoBits.Add(PlcDic.Stop);
             PLC.Write.AutoBits.Add(PlcDic.ComFlash);
@@ -390,10 +395,20 @@ namespace SLTtechSoft
             PLC.Write.AutoBits.Add(PlcDic.MarkingStart);
             PLC.Write.AutoBits.Add(PlcDic.Restart_Marking);
             PLC.Write.AutoBits.Add(PlcDic.MarkingComplete);
+            PLC.Write.AutoBits.Add(PlcDic.CheckFiducialOneDone);
+            PLC.Write.AutoBits.Add(PlcDic.CheckFiducialALLDone);
+            PLC.Write.AutoBits.Add(PlcDic.ResultFace_Corrrect);
+            PLC.Write.AutoBits.Add(PlcDic.CheckCodeOneDone);
+            PLC.Write.AutoBits.Add(PlcDic.CheckCodeALLDone);
+            PLC.Write.AutoBits.Add(PlcDic.Result_Code_Exists);
 
             PLC.Write.WordUshorts.Add(PlcDic.ModelNo);
             PLC.Write.WordIntegers.Add(PlcDic.MarkingPosX);
             PLC.Write.WordIntegers.Add(PlcDic.MarkingPosY);
+            PLC.Write.WordIntegers.Add(PlcDic.CheckFiducial_PosX);
+            PLC.Write.WordIntegers.Add(PlcDic.CheckFiducial_PosY);
+            PLC.Write.WordIntegers.Add(PlcDic.CheckCode_PosX);
+            PLC.Write.WordIntegers.Add(PlcDic.CheckCode_PosY);
         }
         private void ThreadTask()
         {
@@ -419,27 +434,33 @@ namespace SLTtechSoft
             try
             {
                 //int[] dataReadPlc123 = Fx5uPLC.ReadRegister(5000,60);
-                ushort[] dataReadPlc123 = PLCDevice[0].ReadWords("7000", 50);
+                ushort[] dataReadPlc123 = PLCDevice[0].ReadWords("7000", 2);
+                ushort[] D7100 = PLCDevice[0].ReadWords("7100", 20);
                 if (true)
                 {
                     //if (dataReadPlc123[0] == 0) return;
                     //Auto
-                    bool[] D1000 = WordConvert.UshortToBools(dataReadPlc123[0]);
-                    PLC.Read.AutoBits[PlcDic.ComOn] = D1000[0];
-                    PLC.Read.AutoBits[PlcDic.ComFlash]  = D1000[1];
-                    PLC.Read.AutoBits[PlcDic.TriggerCam[0]]  = D1000[2];
-                    PLC.Read.AutoBits[PlcDic.StartMarkingProcess] = D1000[3];
-                    PLC.Read.AutoBits[PlcDic.MarkingCompleteConfirm] = D1000[4];
-                    PLC.Read.AutoBits[PlcDic.MarkingStartConfirm]  = D1000[5];
-                    PLC.Read.AutoBits[PlcDic.MarkingOneDone] = D1000[6];
-                    PLC.Read.AutoBits[PlcDic.LightOn[0]]  = D1000[13];
+                    bool[] D7000 = WordConvert.UshortToBools(dataReadPlc123[0]);
+                    bool[] D7001 = WordConvert.UshortToBools(dataReadPlc123[1]);
+                    PLC.Read.AutoBits[PlcDic.ComOn] = D7000[0];
+                    PLC.Read.AutoBits[PlcDic.ComFlash]  = D7000[1];
+                    PLC.Read.AutoBits[PlcDic.TriggerCam[0]]  = D7000[2];
+                    PLC.Read.AutoBits[PlcDic.StartMarkingProcess] = D7000[3];
+                    PLC.Read.AutoBits[PlcDic.MarkingCompleteConfirm] = D7000[4];
+                    PLC.Read.AutoBits[PlcDic.MarkingStartConfirm]  = D7000[5];
+                    PLC.Read.AutoBits[PlcDic.MarkingOneDone] = D7000[6];
+                    PLC.Read.AutoBits[PlcDic.ScanImageTop] = D7000[7];
+                    PLC.Read.AutoBits[PlcDic.ScanImageBottom] = D7000[8];
+                    PLC.Read.AutoBits[PlcDic.LightOn[0]]  = D7000[13];
+                    PLC.Read.AutoBits[PlcDic.Require_CheckFiducial] = D7000[14];
+                    PLC.Read.AutoBits[PlcDic.StartCheckFiducial] = D7000[15];
 
-
-                    PLC.Read.WordUshorts[PlcDic.ModelNo] = dataReadPlc123[1];
-
-
-                    PLC.Read.WordIntegers[PlcDic.CurentPosX] = WordConvert.USigned32Toint(dataReadPlc123[10], dataReadPlc123[11]);
-                    PLC.Read.WordIntegers[PlcDic.CurentPosY] = WordConvert.USigned32Toint(dataReadPlc123[12], dataReadPlc123[13]);
+                    PLC.Read.AutoBits[PlcDic.Require_CheckCode] = D7001[2];
+                    PLC.Read.AutoBits[PlcDic.StartCheckCode] = D7001[3];
+                    //Word
+                    PLC.Read.WordUshorts[PlcDic.ModelNo] = D7100[1];
+                    PLC.Read.WordIntegers[PlcDic.CurentPosX] = WordConvert.USigned32Toint(D7100[10], D7100[11]);
+                    PLC.Read.WordIntegers[PlcDic.CurentPosY] = WordConvert.USigned32Toint(D7100[12], D7100[13]);
                     //for (int i = 0; i < 14; i++)
                     //{
                     //    bool[] ThisBools = _WordConvert.WordTo16Bit(dataReadPlc123[14 + i]);
@@ -467,6 +488,7 @@ namespace SLTtechSoft
             StopwatchWritePLC.Start();
             try
             {
+                
                 PLC.Write.AutoBits[PlcDic.ComOn] = true;
                
                 DataWritePLC[0] = WordConvert.Bit16ToWord(
@@ -478,24 +500,50 @@ namespace SLTtechSoft
                     PLC.Write.AutoBits[PlcDic.MarkingStart],
                     PLC.Write.AutoBits[PlcDic.Restart_Marking],
                     PLC.Write.AutoBits[PlcDic.MarkingComplete],
-                    false,
-                    false,
+                    PLC.Write.AutoBits[PlcDic.ScanImageTop],
+                    PLC.Write.AutoBits[PlcDic.ScanImageBottom],
                     false,
                     false,
                     false,
                     PLC.Write.AutoBits[PlcDic.LightOn[0]],
+                    PLC.Write.AutoBits[PlcDic.CheckFiducialOneDone],
+                    PLC.Write.AutoBits[PlcDic.CheckFiducialALLDone]
+                );
+                DataWritePLC[1] = WordConvert.Bit16ToWord(
+                    PLC.Write.AutoBits[PlcDic.ResultFace_Corrrect],
+                    false,
+                    PLC.Write.AutoBits[PlcDic.CheckCodeOneDone],
+                    PLC.Write.AutoBits[PlcDic.CheckCodeALLDone],
+                    PLC.Write.AutoBits[PlcDic.Result_Code_Exists],
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
                     false,
                     false
                 );
-
-                DataWritePLC[1] = PLC.Write.WordUshorts[PlcDic.ModelNo];
-
-                DataWritePLC[10] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.MarkingPosX]).Upper;
-                DataWritePLC[11] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.MarkingPosX]).Lowwer;
-                DataWritePLC[12] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.MarkingPosY]).Upper;
-                DataWritePLC[13] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.MarkingPosY]).Lowwer;
                 PLCDevice[0].WriteWords("7500", DataWritePLC);
-         
+
+                //Word
+                DataWriteWPLC[1] = PLC.Write.WordUshorts[PlcDic.ModelNo];
+                DataWriteWPLC[10] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.MarkingPosX]).Upper;
+                DataWriteWPLC[11] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.MarkingPosX]).Lowwer;
+                DataWriteWPLC[12] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.MarkingPosY]).Upper;
+                DataWriteWPLC[13] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.MarkingPosY]).Lowwer;
+                DataWriteWPLC[14] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.CheckFiducial_PosX]).Upper;
+                DataWriteWPLC[15] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.CheckFiducial_PosX]).Lowwer;
+                DataWriteWPLC[16] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.CheckFiducial_PosY]).Upper;
+                DataWriteWPLC[17] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.CheckFiducial_PosY]).Lowwer;
+                DataWriteWPLC[18] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.CheckCode_PosX]).Upper;
+                DataWriteWPLC[19] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.CheckCode_PosX]).Lowwer;
+                DataWriteWPLC[20] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.CheckCode_PosY]).Upper;
+                DataWriteWPLC[21] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.CheckCode_PosY]).Lowwer;
+                PLCDevice[0].WriteWords("7600", DataWriteWPLC);
             }
             catch (Exception ex)
             {
@@ -504,6 +552,34 @@ namespace SLTtechSoft
             StopwatchWritePLC.Stop();
             TimeSpan ts2 = StopwatchWritePLC.Elapsed;
             TimeWritePLC = $"{ts2.Seconds}.{PadLeftZeros(ts2.Milliseconds, 3)}";
+        }
+        int IndexProcessAutoScan = 0;
+        public void AutoScanImage()
+        {
+            if (IsTestNoPLC) return;
+            if (PLCDevice == null || PLCDevice[0] == null || !PLCDevice[0].IsConnected) return;
+            switch(IndexProcessAutoScan)
+            {
+                case 0:
+                   if(PLC.Read.AutoBits[PlcDic.ScanImageTop]&&!PLC.Read.AutoBits[PlcDic.ScanImageBottom])
+                    {
+                        formModel.laserSettingLayout.SwitchSurface(LaserSettingLayout.LaserSurface.Top);
+                        IndexProcessAutoScan = 1;
+                    }
+                   else if (PLC.Read.AutoBits[PlcDic.ScanImageBottom]&&!PLC.Read.AutoBits[PlcDic.ScanImageTop])
+                    {
+                        formModel.laserSettingLayout.SwitchSurface(LaserSettingLayout.LaserSurface.Bot);
+                        IndexProcessAutoScan = 10;
+                    }
+                    break;
+                case 1:
+                    //formModel.laserSettingLayout.ScanImageClick();
+                    break;
+                case 10:
+                    //formModel.laserSettingLayout.ScanImageClick();
+                    break;
+
+            }
         }
         private void Ui(Action action)
         {
@@ -2270,8 +2346,10 @@ namespace SLTtechSoft
         private IPlc[] PLCDevice = new IPlc[2];
 
         public static int threadSleepTime = 5;
-        private static int NumberWritePLC = 100; //Max == 123
+        private static int NumberWritePLC = 2;
+        private static int NumberWriteWPLC = 30;//Max == 123
         private static ushort[] DataWritePLC;
+        private static ushort[] DataWriteWPLC;
         private static ushort[] DataArray2;
         private Stopwatch StopwatchReadPLC = new Stopwatch();
         private Stopwatch StopwatchWritePLC = new Stopwatch();

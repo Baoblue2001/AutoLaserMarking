@@ -30,15 +30,14 @@ namespace SLTtechSoft
             this.distributeVertical = new System.Windows.Forms.Button();
             this.panel2 = new System.Windows.Forms.Panel();
             this.panel5 = new System.Windows.Forms.Panel();
+            this.panel7 = new System.Windows.Forms.Panel();
+            this.ListPicture = new System.Windows.Forms.Label();
+            this.dgvListPictureSub = new System.Windows.Forms.DataGridView();
+            this.btnAddPicture = new System.Windows.Forms.Button();
+            this.btnDeletePic = new System.Windows.Forms.Button();
+            this.btnPicDeleteAll = new System.Windows.Forms.Button();
             this.panel6 = new System.Windows.Forms.Panel();
             this.imagePanel = new System.Windows.Forms.Panel();
-            this.imageViewport = new SLTtechSoft.BufferedViewportPanel();
-            this.imageTools = new System.Windows.Forms.Panel();
-            this.fitImage = new System.Windows.Forms.Button();
-            this.zoomOut = new System.Windows.Forms.Button();
-            this.zoomIn = new System.Windows.Forms.Button();
-            this.zoomLabel = new System.Windows.Forms.Label();
-            this.markingImage = new System.Windows.Forms.PictureBox();
             this.codePanel = new System.Windows.Forms.Panel();
             this.codeTitle = new System.Windows.Forms.Label();
             this.positionXLabel = new System.Windows.Forms.Label();
@@ -78,9 +77,7 @@ namespace SLTtechSoft
             this.heightLabel = new System.Windows.Forms.Label();
             this.widthValue = new System.Windows.Forms.TextBox();
             this.resolutionUnit = new System.Windows.Forms.Label();
-            this.resolutionLabel = new System.Windows.Forms.Label();
             this.heightValue = new System.Windows.Forms.TextBox();
-            this.resolutionValue = new System.Windows.Forms.TextBox();
             this.widthUnit = new System.Windows.Forms.Label();
             this.imagePixelToMmLabel = new System.Windows.Forms.Label();
             this.heightUnit = new System.Windows.Forms.Label();
@@ -91,21 +88,21 @@ namespace SLTtechSoft
             this.robotResolutionValue = new System.Windows.Forms.TextBox();
             this.saveOne = new System.Windows.Forms.Button();
             this.discard = new System.Windows.Forms.Button();
-            this.panel7 = new System.Windows.Forms.Panel();
-            this.ListPicture = new System.Windows.Forms.Label();
-            this.dgvListPictureSub = new System.Windows.Forms.DataGridView();
-            this.btnAddPicture = new System.Windows.Forms.Button();
-            this.btnDeletePic = new System.Windows.Forms.Button();
-            this.btnPicDeleteAll = new System.Windows.Forms.Button();
+            this.imageViewport = new SLTtechSoft.BufferedViewportPanel();
+            this.imageTools = new System.Windows.Forms.Panel();
+            this.fitImage = new System.Windows.Forms.Button();
+            this.zoomOut = new System.Windows.Forms.Button();
+            this.zoomIn = new System.Windows.Forms.Button();
+            this.zoomLabel = new System.Windows.Forms.Label();
+            this.markingImage = new System.Windows.Forms.PictureBox();
             this.panel1.SuspendLayout();
             this.topToolbar.SuspendLayout();
             this.panel2.SuspendLayout();
             this.panel5.SuspendLayout();
+            this.panel7.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)(this.dgvListPictureSub)).BeginInit();
             this.panel6.SuspendLayout();
             this.imagePanel.SuspendLayout();
-            this.imageViewport.SuspendLayout();
-            this.imageTools.SuspendLayout();
-            ((System.ComponentModel.ISupportInitialize)(this.markingImage)).BeginInit();
             this.codePanel.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.positionX)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.positionY)).BeginInit();
@@ -116,8 +113,9 @@ namespace SLTtechSoft
             this.panel3.SuspendLayout();
             this.panel4.SuspendLayout();
             this.productPanel.SuspendLayout();
-            this.panel7.SuspendLayout();
-            ((System.ComponentModel.ISupportInitialize)(this.dgvListPictureSub)).BeginInit();
+            this.imageViewport.SuspendLayout();
+            this.imageTools.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)(this.markingImage)).BeginInit();
             this.SuspendLayout();
             // 
             // panel1
@@ -330,6 +328,70 @@ namespace SLTtechSoft
             this.panel5.Size = new System.Drawing.Size(1370, 585);
             this.panel5.TabIndex = 12;
             // 
+            // panel7
+            // 
+            this.panel7.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(157)))), ((int)(((byte)(184)))), ((int)(((byte)(211)))));
+            this.panel7.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
+            this.panel7.Controls.Add(this.ListPicture);
+            this.panel7.Controls.Add(this.dgvListPictureSub);
+            this.panel7.Controls.Add(this.btnAddPicture);
+            this.panel7.Controls.Add(this.btnDeletePic);
+            this.panel7.Controls.Add(this.btnPicDeleteAll);
+            this.panel7.Location = new System.Drawing.Point(1064, 377);
+            this.panel7.Name = "panel7";
+            this.panel7.Size = new System.Drawing.Size(300, 173);
+            this.panel7.TabIndex = 12;
+            // 
+            // ListPicture
+            // 
+            this.ListPicture.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(255)))), ((int)(((byte)(166)))), ((int)(((byte)(0)))));
+            this.ListPicture.Font = new System.Drawing.Font("Segoe UI", 10F, System.Drawing.FontStyle.Bold);
+            this.ListPicture.Location = new System.Drawing.Point(4, 7);
+            this.ListPicture.Name = "ListPicture";
+            this.ListPicture.Size = new System.Drawing.Size(215, 25);
+            this.ListPicture.TabIndex = 0;
+            this.ListPicture.Text = "Picture ";
+            // 
+            // dgvListPictureSub
+            // 
+            this.dgvListPictureSub.AllowUserToAddRows = false;
+            this.dgvListPictureSub.AutoSizeColumnsMode = System.Windows.Forms.DataGridViewAutoSizeColumnsMode.Fill;
+            this.dgvListPictureSub.Location = new System.Drawing.Point(5, 35);
+            this.dgvListPictureSub.Name = "dgvListPictureSub";
+            this.dgvListPictureSub.RowHeadersVisible = false;
+            this.dgvListPictureSub.Size = new System.Drawing.Size(214, 125);
+            this.dgvListPictureSub.TabIndex = 1;
+            // 
+            // btnAddPicture
+            // 
+            this.btnAddPicture.BackColor = System.Drawing.Color.Snow;
+            this.btnAddPicture.Location = new System.Drawing.Point(227, 35);
+            this.btnAddPicture.Name = "btnAddPicture";
+            this.btnAddPicture.Size = new System.Drawing.Size(72, 28);
+            this.btnAddPicture.TabIndex = 2;
+            this.btnAddPicture.Text = "Add";
+            this.btnAddPicture.UseVisualStyleBackColor = false;
+            // 
+            // btnDeletePic
+            // 
+            this.btnDeletePic.BackColor = System.Drawing.Color.Snow;
+            this.btnDeletePic.Location = new System.Drawing.Point(227, 69);
+            this.btnDeletePic.Name = "btnDeletePic";
+            this.btnDeletePic.Size = new System.Drawing.Size(72, 28);
+            this.btnDeletePic.TabIndex = 3;
+            this.btnDeletePic.Text = "Delete";
+            this.btnDeletePic.UseVisualStyleBackColor = false;
+            // 
+            // btnPicDeleteAll
+            // 
+            this.btnPicDeleteAll.BackColor = System.Drawing.Color.Snow;
+            this.btnPicDeleteAll.Location = new System.Drawing.Point(227, 104);
+            this.btnPicDeleteAll.Name = "btnPicDeleteAll";
+            this.btnPicDeleteAll.Size = new System.Drawing.Size(72, 28);
+            this.btnPicDeleteAll.TabIndex = 4;
+            this.btnPicDeleteAll.Text = "Delete All";
+            this.btnPicDeleteAll.UseVisualStyleBackColor = false;
+            // 
             // panel6
             // 
             this.panel6.Controls.Add(this.imagePanel);
@@ -349,75 +411,6 @@ namespace SLTtechSoft
             this.imagePanel.Name = "imagePanel";
             this.imagePanel.Size = new System.Drawing.Size(657, 585);
             this.imagePanel.TabIndex = 7;
-            // 
-            // imageViewport
-            // 
-            this.imageViewport.AutoScroll = true;
-            this.imageViewport.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(65)))), ((int)(((byte)(65)))), ((int)(((byte)(65)))));
-            this.imageViewport.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
-            this.imageViewport.Controls.Add(this.imageTools);
-            this.imageViewport.Controls.Add(this.markingImage);
-            this.imageViewport.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.imageViewport.Location = new System.Drawing.Point(0, 0);
-            this.imageViewport.Name = "imageViewport";
-            this.imageViewport.Size = new System.Drawing.Size(655, 583);
-            this.imageViewport.TabIndex = 1;
-            // 
-            // imageTools
-            // 
-            this.imageTools.BackColor = System.Drawing.Color.White;
-            this.imageTools.Controls.Add(this.fitImage);
-            this.imageTools.Controls.Add(this.zoomOut);
-            this.imageTools.Controls.Add(this.zoomIn);
-            this.imageTools.Controls.Add(this.zoomLabel);
-            this.imageTools.Location = new System.Drawing.Point(520, 1);
-            this.imageTools.Name = "imageTools";
-            this.imageTools.Size = new System.Drawing.Size(130, 28);
-            this.imageTools.TabIndex = 0;
-            // 
-            // fitImage
-            // 
-            this.fitImage.Location = new System.Drawing.Point(2, 2);
-            this.fitImage.Name = "fitImage";
-            this.fitImage.Size = new System.Drawing.Size(28, 24);
-            this.fitImage.TabIndex = 0;
-            this.fitImage.Text = "Fit";
-            // 
-            // zoomOut
-            // 
-            this.zoomOut.Location = new System.Drawing.Point(32, 2);
-            this.zoomOut.Name = "zoomOut";
-            this.zoomOut.Size = new System.Drawing.Size(22, 24);
-            this.zoomOut.TabIndex = 1;
-            this.zoomOut.Text = "-";
-            // 
-            // zoomIn
-            // 
-            this.zoomIn.Location = new System.Drawing.Point(56, 2);
-            this.zoomIn.Name = "zoomIn";
-            this.zoomIn.Size = new System.Drawing.Size(22, 24);
-            this.zoomIn.TabIndex = 2;
-            this.zoomIn.Text = "+";
-            // 
-            // zoomLabel
-            // 
-            this.zoomLabel.AutoSize = true;
-            this.zoomLabel.ForeColor = System.Drawing.Color.Black;
-            this.zoomLabel.Location = new System.Drawing.Point(82, 7);
-            this.zoomLabel.Name = "zoomLabel";
-            this.zoomLabel.Size = new System.Drawing.Size(35, 15);
-            this.zoomLabel.TabIndex = 3;
-            this.zoomLabel.Text = "100%";
-            // 
-            // markingImage
-            // 
-            this.markingImage.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(95)))), ((int)(((byte)(95)))), ((int)(((byte)(95)))));
-            this.markingImage.Location = new System.Drawing.Point(10, 40);
-            this.markingImage.Name = "markingImage";
-            this.markingImage.Size = new System.Drawing.Size(558, 488);
-            this.markingImage.SizeMode = System.Windows.Forms.PictureBoxSizeMode.Zoom;
-            this.markingImage.TabIndex = 0;
-            this.markingImage.TabStop = false;
             // 
             // codePanel
             // 
@@ -759,9 +752,7 @@ namespace SLTtechSoft
             this.productPanel.Controls.Add(this.heightLabel);
             this.productPanel.Controls.Add(this.widthValue);
             this.productPanel.Controls.Add(this.resolutionUnit);
-            this.productPanel.Controls.Add(this.resolutionLabel);
             this.productPanel.Controls.Add(this.heightValue);
-            this.productPanel.Controls.Add(this.resolutionValue);
             this.productPanel.Controls.Add(this.widthUnit);
             this.productPanel.Controls.Add(this.imagePixelToMmLabel);
             this.productPanel.Controls.Add(this.heightUnit);
@@ -786,6 +777,7 @@ namespace SLTtechSoft
             this.btnloadimage.TabIndex = 12;
             this.btnloadimage.Text = "Load Image";
             this.btnloadimage.UseVisualStyleBackColor = false;
+            this.btnloadimage.Visible = false;
             // 
             // productTitle
             // 
@@ -825,20 +817,11 @@ namespace SLTtechSoft
             // 
             // resolutionUnit
             // 
-            this.resolutionUnit.Location = new System.Drawing.Point(855, 11);
+            this.resolutionUnit.Location = new System.Drawing.Point(855, 34);
             this.resolutionUnit.Name = "resolutionUnit";
             this.resolutionUnit.Size = new System.Drawing.Size(100, 23);
             this.resolutionUnit.TabIndex = 7;
             this.resolutionUnit.Text = "mm/px";
-            // 
-            // resolutionLabel
-            // 
-            this.resolutionLabel.AutoSize = true;
-            this.resolutionLabel.Location = new System.Drawing.Point(629, 11);
-            this.resolutionLabel.Name = "resolutionLabel";
-            this.resolutionLabel.Size = new System.Drawing.Size(96, 15);
-            this.resolutionLabel.TabIndex = 5;
-            this.resolutionLabel.Text = "ResolutionImage";
             // 
             // heightValue
             // 
@@ -847,14 +830,6 @@ namespace SLTtechSoft
             this.heightValue.Size = new System.Drawing.Size(130, 23);
             this.heightValue.TabIndex = 4;
             this.heightValue.Text = "650.00";
-            // 
-            // resolutionValue
-            // 
-            this.resolutionValue.Location = new System.Drawing.Point(744, 7);
-            this.resolutionValue.Name = "resolutionValue";
-            this.resolutionValue.Size = new System.Drawing.Size(105, 23);
-            this.resolutionValue.TabIndex = 6;
-            this.resolutionValue.Text = "1";
             // 
             // widthUnit
             // 
@@ -946,69 +921,74 @@ namespace SLTtechSoft
             this.discard.Text = "Discard";
             this.discard.UseVisualStyleBackColor = false;
             // 
-            // panel7
+            // imageViewport
             // 
-            this.panel7.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(157)))), ((int)(((byte)(184)))), ((int)(((byte)(211)))));
-            this.panel7.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
-            this.panel7.Controls.Add(this.ListPicture);
-            this.panel7.Controls.Add(this.dgvListPictureSub);
-            this.panel7.Controls.Add(this.btnAddPicture);
-            this.panel7.Controls.Add(this.btnDeletePic);
-            this.panel7.Controls.Add(this.btnPicDeleteAll);
-            this.panel7.Location = new System.Drawing.Point(1064, 377);
-            this.panel7.Name = "panel7";
-            this.panel7.Size = new System.Drawing.Size(300, 173);
-            this.panel7.TabIndex = 12;
+            this.imageViewport.AutoScroll = true;
+            this.imageViewport.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(65)))), ((int)(((byte)(65)))), ((int)(((byte)(65)))));
+            this.imageViewport.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
+            this.imageViewport.Controls.Add(this.imageTools);
+            this.imageViewport.Controls.Add(this.markingImage);
+            this.imageViewport.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.imageViewport.Location = new System.Drawing.Point(0, 0);
+            this.imageViewport.Name = "imageViewport";
+            this.imageViewport.Size = new System.Drawing.Size(655, 583);
+            this.imageViewport.TabIndex = 1;
             // 
-            // ListPicture
+            // imageTools
             // 
-            this.ListPicture.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(255)))), ((int)(((byte)(166)))), ((int)(((byte)(0)))));
-            this.ListPicture.Font = new System.Drawing.Font("Segoe UI", 10F, System.Drawing.FontStyle.Bold);
-            this.ListPicture.Location = new System.Drawing.Point(4, 7);
-            this.ListPicture.Name = "ListPicture";
-            this.ListPicture.Size = new System.Drawing.Size(215, 25);
-            this.ListPicture.TabIndex = 0;
-            this.ListPicture.Text = "Picture ";
+            this.imageTools.BackColor = System.Drawing.Color.White;
+            this.imageTools.Controls.Add(this.fitImage);
+            this.imageTools.Controls.Add(this.zoomOut);
+            this.imageTools.Controls.Add(this.zoomIn);
+            this.imageTools.Controls.Add(this.zoomLabel);
+            this.imageTools.Location = new System.Drawing.Point(520, 1);
+            this.imageTools.Name = "imageTools";
+            this.imageTools.Size = new System.Drawing.Size(130, 28);
+            this.imageTools.TabIndex = 0;
             // 
-            // dgvListPictureSub
+            // fitImage
             // 
-            this.dgvListPictureSub.AllowUserToAddRows = false;
-            this.dgvListPictureSub.AutoSizeColumnsMode = System.Windows.Forms.DataGridViewAutoSizeColumnsMode.Fill;
-            this.dgvListPictureSub.Location = new System.Drawing.Point(5, 35);
-            this.dgvListPictureSub.Name = "dgvListPictureSub";
-            this.dgvListPictureSub.RowHeadersVisible = false;
-            this.dgvListPictureSub.Size = new System.Drawing.Size(214, 125);
-            this.dgvListPictureSub.TabIndex = 1;
+            this.fitImage.Location = new System.Drawing.Point(2, 2);
+            this.fitImage.Name = "fitImage";
+            this.fitImage.Size = new System.Drawing.Size(28, 24);
+            this.fitImage.TabIndex = 0;
+            this.fitImage.Text = "Fit";
             // 
-            // btnAddPicture
+            // zoomOut
             // 
-            this.btnAddPicture.BackColor = System.Drawing.Color.Snow;
-            this.btnAddPicture.Location = new System.Drawing.Point(227, 35);
-            this.btnAddPicture.Name = "btnAddPicture";
-            this.btnAddPicture.Size = new System.Drawing.Size(72, 28);
-            this.btnAddPicture.TabIndex = 2;
-            this.btnAddPicture.Text = "Add";
-            this.btnAddPicture.UseVisualStyleBackColor = false;
+            this.zoomOut.Location = new System.Drawing.Point(32, 2);
+            this.zoomOut.Name = "zoomOut";
+            this.zoomOut.Size = new System.Drawing.Size(22, 24);
+            this.zoomOut.TabIndex = 1;
+            this.zoomOut.Text = "-";
             // 
-            // btnDeletePic
+            // zoomIn
             // 
-            this.btnDeletePic.BackColor = System.Drawing.Color.Snow;
-            this.btnDeletePic.Location = new System.Drawing.Point(227, 69);
-            this.btnDeletePic.Name = "btnDeletePic";
-            this.btnDeletePic.Size = new System.Drawing.Size(72, 28);
-            this.btnDeletePic.TabIndex = 3;
-            this.btnDeletePic.Text = "Delete";
-            this.btnDeletePic.UseVisualStyleBackColor = false;
+            this.zoomIn.Location = new System.Drawing.Point(56, 2);
+            this.zoomIn.Name = "zoomIn";
+            this.zoomIn.Size = new System.Drawing.Size(22, 24);
+            this.zoomIn.TabIndex = 2;
+            this.zoomIn.Text = "+";
             // 
-            // btnPicDeleteAll
+            // zoomLabel
             // 
-            this.btnPicDeleteAll.BackColor = System.Drawing.Color.Snow;
-            this.btnPicDeleteAll.Location = new System.Drawing.Point(227, 104);
-            this.btnPicDeleteAll.Name = "btnPicDeleteAll";
-            this.btnPicDeleteAll.Size = new System.Drawing.Size(72, 28);
-            this.btnPicDeleteAll.TabIndex = 4;
-            this.btnPicDeleteAll.Text = "Delete All";
-            this.btnPicDeleteAll.UseVisualStyleBackColor = false;
+            this.zoomLabel.AutoSize = true;
+            this.zoomLabel.ForeColor = System.Drawing.Color.Black;
+            this.zoomLabel.Location = new System.Drawing.Point(82, 7);
+            this.zoomLabel.Name = "zoomLabel";
+            this.zoomLabel.Size = new System.Drawing.Size(35, 15);
+            this.zoomLabel.TabIndex = 3;
+            this.zoomLabel.Text = "100%";
+            // 
+            // markingImage
+            // 
+            this.markingImage.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(95)))), ((int)(((byte)(95)))), ((int)(((byte)(95)))));
+            this.markingImage.Location = new System.Drawing.Point(10, 40);
+            this.markingImage.Name = "markingImage";
+            this.markingImage.Size = new System.Drawing.Size(558, 488);
+            this.markingImage.SizeMode = System.Windows.Forms.PictureBoxSizeMode.Zoom;
+            this.markingImage.TabIndex = 0;
+            this.markingImage.TabStop = false;
             // 
             // LaserSettingLayout
             // 
@@ -1025,12 +1005,10 @@ namespace SLTtechSoft
             this.topToolbar.ResumeLayout(false);
             this.panel2.ResumeLayout(false);
             this.panel5.ResumeLayout(false);
+            this.panel7.ResumeLayout(false);
+            ((System.ComponentModel.ISupportInitialize)(this.dgvListPictureSub)).EndInit();
             this.panel6.ResumeLayout(false);
             this.imagePanel.ResumeLayout(false);
-            this.imageViewport.ResumeLayout(false);
-            this.imageTools.ResumeLayout(false);
-            this.imageTools.PerformLayout();
-            ((System.ComponentModel.ISupportInitialize)(this.markingImage)).EndInit();
             this.codePanel.ResumeLayout(false);
             this.codePanel.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)(this.positionX)).EndInit();
@@ -1045,8 +1023,10 @@ namespace SLTtechSoft
             this.panel4.PerformLayout();
             this.productPanel.ResumeLayout(false);
             this.productPanel.PerformLayout();
-            this.panel7.ResumeLayout(false);
-            ((System.ComponentModel.ISupportInitialize)(this.dgvListPictureSub)).EndInit();
+            this.imageViewport.ResumeLayout(false);
+            this.imageTools.ResumeLayout(false);
+            this.imageTools.PerformLayout();
+            ((System.ComponentModel.ISupportInitialize)(this.markingImage)).EndInit();
             this.ResumeLayout(false);
 
         }
@@ -1070,8 +1050,6 @@ namespace SLTtechSoft
         private System.Windows.Forms.Panel panel2;
         private System.Windows.Forms.Panel panel3;
         private System.Windows.Forms.Panel panel4;
-        private System.Windows.Forms.Button btnBot;
-        private System.Windows.Forms.Button btnTop;
         private System.Windows.Forms.Label label1;
         private System.Windows.Forms.Panel productPanel;
         private System.Windows.Forms.Button btnloadimage;
@@ -1082,7 +1060,6 @@ namespace SLTtechSoft
         private System.Windows.Forms.TextBox heightValue;
         private System.Windows.Forms.Label widthUnit;
         private System.Windows.Forms.Label heightUnit;
-        private System.Windows.Forms.Button scanImage;
         private System.Windows.Forms.Button saveAll;
         private System.Windows.Forms.Button saveOne;
         private System.Windows.Forms.Button discard;
@@ -1118,8 +1095,6 @@ namespace SLTtechSoft
         private System.Windows.Forms.Button addFiducial;
         private System.Windows.Forms.Button deleteFiducial;
         private System.Windows.Forms.Button deleteAllFiducial;
-        private System.Windows.Forms.Label resolutionLabel;
-        private System.Windows.Forms.TextBox resolutionValue;
         private System.Windows.Forms.Label resolutionUnit;
         private System.Windows.Forms.Label imagePixelToMmLabel;
         private System.Windows.Forms.TextBox imagePixelToMmValue;
@@ -1136,5 +1111,8 @@ namespace SLTtechSoft
         private System.Windows.Forms.Button btnAddPicture;
         private System.Windows.Forms.Button btnDeletePic;
         private System.Windows.Forms.Button btnPicDeleteAll;
+        public System.Windows.Forms.Button scanImage;
+        public System.Windows.Forms.Button btnBot;
+        public System.Windows.Forms.Button btnTop;
     }
 }

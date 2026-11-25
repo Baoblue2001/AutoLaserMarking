@@ -364,7 +364,12 @@ namespace SLTtechSoft
             if (string.IsNullOrEmpty(text)) return null;
             string[] values;
             if (!_translations.TryGetValue(text, out values)) return null;
-            return values[(int)language];
+            switch (language)
+            {
+                case AppLanguage.English: return values[0];
+                case AppLanguage.Korean: return values[2];
+                default: return values[1];
+            }
         }
     }
 }

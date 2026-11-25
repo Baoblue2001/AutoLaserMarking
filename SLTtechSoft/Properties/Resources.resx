@@ -136,6 +136,9 @@
   <data name="AutoMode3" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\AutoMode3.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
   </data>
+  <data name="uploads-2022-th-c3-a1ng-208-ng-c3-a0y_31-nga-quockyvietnam-copy-7814" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\uploads-2022-th-c3-a1ng-208-ng-c3-a0y_31-nga-quockyvietnam-copy-7814.jpg;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
+  </data>
   <data name="capture" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\capture.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
   </data>
@@ -214,10 +217,16 @@
   <data name="Drop-down" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\Drop-down.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
   </data>
+  <data name="Black-background" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\Black-background.jpg;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
+  </data>
   <data name="icons8_info_38__ldpi_" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\icons8-info-38(-ldpi).png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
   </data>
-  <data name="Black-background" type="System.Resources.ResXFileRef, System.Windows.Forms">
-    <value>..\Resources\Black-background.jpg;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
+  <data name="Fold-us-flag-animated" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\Fold-us-flag-animated.gif;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
+  </data>
+  <data name="images" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\images.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
   </data>
 </root>

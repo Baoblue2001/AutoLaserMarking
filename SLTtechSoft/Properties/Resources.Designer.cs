@@ -243,6 +243,16 @@ namespace SLTtechSoft.Properties {
         /// <summary>
         ///   Looks up a localized resource of type System.Drawing.Bitmap.
         /// </summary>
+        internal static System.Drawing.Bitmap Fold_us_flag_animated {
+            get {
+                object obj = ResourceManager.GetObject("Fold-us-flag-animated", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
         internal static System.Drawing.Bitmap icons8_database_import_32 {
             get {
                 object obj = ResourceManager.GetObject("icons8_database_import_32", resourceCulture);
@@ -276,6 +286,16 @@ namespace SLTtechSoft.Properties {
         internal static System.Drawing.Bitmap icons8_order_history_32 {
             get {
                 object obj = ResourceManager.GetObject("icons8_order_history_32", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
+        internal static System.Drawing.Bitmap images {
+            get {
+                object obj = ResourceManager.GetObject("images", resourceCulture);
                 return ((System.Drawing.Bitmap)(obj));
             }
         }
@@ -376,6 +396,16 @@ namespace SLTtechSoft.Properties {
         internal static System.Drawing.Bitmap StopAuto1 {
             get {
                 object obj = ResourceManager.GetObject("StopAuto1", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
+        internal static System.Drawing.Bitmap uploads_2022_th_c3_a1ng_208_ng_c3_a0y_31_nga_quockyvietnam_copy_7814 {
+            get {
+                object obj = ResourceManager.GetObject("uploads-2022-th-c3-a1ng-208-ng-c3-a0y_31-nga-quockyvietnam-copy-7814", resourceCulture);
                 return ((System.Drawing.Bitmap)(obj));
             }
         }

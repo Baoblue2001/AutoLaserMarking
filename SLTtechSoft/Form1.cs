@@ -323,7 +323,7 @@ namespace SLTtechSoft
             formModel.InitializeUI(this);
             formIO.InitializeUI(this);
             formMain.InitializeUI(this);
-            InitialPrinter();
+            
             formIO.timer1.Enabled = false;
 
             IndexFormShowing = 0;
@@ -916,6 +916,7 @@ namespace SLTtechSoft
             }
             if (CountStartThread == 10)
             {
+                InitialPrinter();
                 threadCam1.Start();
                 ConnectPLC(0);
                 trd.Start();

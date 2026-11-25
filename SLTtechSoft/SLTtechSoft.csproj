@@ -450,6 +450,9 @@
     <None Include="Resources\ArrowLeftDown.png" />
     <None Include="Resources\logo.png" />
     <None Include="Resources\Black-background.jpg" />
+    <None Include="Resources\uploads-2022-th-c3-a1ng-208-ng-c3-a0y_31-nga-quockyvietnam-copy-7814.jpg" />
+    <None Include="Resources\Fold-us-flag-animated.gif" />
+    <None Include="Resources\images.png" />
     <Content Include="VisionMeasurementIcon.ico" />
     <None Include="Resources\CornerStoneLogo.png" />
     <None Include="Resources\InitialStateIcon.png" />

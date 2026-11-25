@@ -94,7 +94,7 @@
             this.panel16 = new System.Windows.Forms.Panel();
             this.panel18 = new System.Windows.Forms.Panel();
             this.panel22 = new System.Windows.Forms.Panel();
-            this.dataGridView1 = new System.Windows.Forms.DataGridView();
+            this.dgvPrintScanDataTable = new System.Windows.Forms.DataGridView();
             this.panel19 = new System.Windows.Forms.Panel();
             this.panel24 = new System.Windows.Forms.Panel();
             this.panel32 = new System.Windows.Forms.Panel();
@@ -104,7 +104,13 @@
             this.txt1STbarcode = new System.Windows.Forms.TextBox();
             this.txtYMMDDN = new System.Windows.Forms.TextBox();
             this.txtSerialNo = new System.Windows.Forms.TextBox();
+            this.label13 = new System.Windows.Forms.Label();
+            this.panel36 = new System.Windows.Forms.Panel();
+            this.txtRank2 = new System.Windows.Forms.TextBox();
             this.txtRank = new System.Windows.Forms.TextBox();
+            this.txtArrayCount = new System.Windows.Forms.TextBox();
+            this.txtMesResult = new System.Windows.Forms.TextBox();
+            this.txt1StScan = new System.Windows.Forms.TextBox();
             this.panel31 = new System.Windows.Forms.Panel();
             this.flowLayoutPanel1 = new System.Windows.Forms.FlowLayoutPanel();
             this.label6 = new System.Windows.Forms.Label();
@@ -137,12 +143,6 @@
             this.panel40 = new System.Windows.Forms.Panel();
             this.label15 = new System.Windows.Forms.Label();
             this.panel41 = new System.Windows.Forms.Panel();
-            this.label13 = new System.Windows.Forms.Label();
-            this.panel36 = new System.Windows.Forms.Panel();
-            this.txtArrayCount = new System.Windows.Forms.TextBox();
-            this.txtMesResult = new System.Windows.Forms.TextBox();
-            this.txt1StScan = new System.Windows.Forms.TextBox();
-            this.txtRank2 = new System.Windows.Forms.TextBox();
             this.panel7.SuspendLayout();
             this.panel8.SuspendLayout();
             this.panel25.SuspendLayout();
@@ -167,11 +167,12 @@
             this.panel16.SuspendLayout();
             this.panel18.SuspendLayout();
             this.panel22.SuspendLayout();
-            ((System.ComponentModel.ISupportInitialize)(this.dataGridView1)).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)(this.dgvPrintScanDataTable)).BeginInit();
             this.panel19.SuspendLayout();
             this.panel24.SuspendLayout();
             this.panel32.SuspendLayout();
             this.flowLayoutPanel2.SuspendLayout();
+            this.panel36.SuspendLayout();
             this.panel31.SuspendLayout();
             this.flowLayoutPanel1.SuspendLayout();
             this.panel2.SuspendLayout();
@@ -190,7 +191,6 @@
             this.panel5.SuspendLayout();
             this.panel39.SuspendLayout();
             this.panel40.SuspendLayout();
-            this.panel36.SuspendLayout();
             this.SuspendLayout();
             // 
             // tableLayoutPanelVisionAll
@@ -705,15 +705,15 @@
             // 
             // panel22
             // 
-            this.panel22.Controls.Add(this.dataGridView1);
+            this.panel22.Controls.Add(this.dgvPrintScanDataTable);
             resources.ApplyResources(this.panel22, "panel22");
             this.panel22.Name = "panel22";
             // 
-            // dataGridView1
+            // dgvPrintScanDataTable
             // 
-            this.dataGridView1.ColumnHeadersHeightSizeMode = System.Windows.Forms.DataGridViewColumnHeadersHeightSizeMode.AutoSize;
-            resources.ApplyResources(this.dataGridView1, "dataGridView1");
-            this.dataGridView1.Name = "dataGridView1";
+            this.dgvPrintScanDataTable.ColumnHeadersHeightSizeMode = System.Windows.Forms.DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            resources.ApplyResources(this.dgvPrintScanDataTable, "dgvPrintScanDataTable");
+            this.dgvPrintScanDataTable.Name = "dgvPrintScanDataTable";
             // 
             // panel19
             // 
@@ -778,10 +778,42 @@
             resources.ApplyResources(this.txtSerialNo, "txtSerialNo");
             this.txtSerialNo.Name = "txtSerialNo";
             // 
+            // label13
+            // 
+            resources.ApplyResources(this.label13, "label13");
+            this.label13.Name = "label13";
+            // 
+            // panel36
+            // 
+            this.panel36.Controls.Add(this.txtRank2);
+            this.panel36.Controls.Add(this.txtRank);
+            resources.ApplyResources(this.panel36, "panel36");
+            this.panel36.Name = "panel36";
+            // 
+            // txtRank2
+            // 
+            resources.ApplyResources(this.txtRank2, "txtRank2");
+            this.txtRank2.Name = "txtRank2";
+            // 
             // txtRank
             // 
             resources.ApplyResources(this.txtRank, "txtRank");
             this.txtRank.Name = "txtRank";
+            // 
+            // txtArrayCount
+            // 
+            resources.ApplyResources(this.txtArrayCount, "txtArrayCount");
+            this.txtArrayCount.Name = "txtArrayCount";
+            // 
+            // txtMesResult
+            // 
+            resources.ApplyResources(this.txtMesResult, "txtMesResult");
+            this.txtMesResult.Name = "txtMesResult";
+            // 
+            // txt1StScan
+            // 
+            resources.ApplyResources(this.txt1StScan, "txt1StScan");
+            this.txt1StScan.Name = "txt1StScan";
             // 
             // panel31
             // 
@@ -1004,38 +1036,6 @@
             resources.ApplyResources(this.panel41, "panel41");
             this.panel41.Name = "panel41";
             // 
-            // label13
-            // 
-            resources.ApplyResources(this.label13, "label13");
-            this.label13.Name = "label13";
-            // 
-            // panel36
-            // 
-            this.panel36.Controls.Add(this.txtRank2);
-            this.panel36.Controls.Add(this.txtRank);
-            resources.ApplyResources(this.panel36, "panel36");
-            this.panel36.Name = "panel36";
-            // 
-            // txtArrayCount
-            // 
-            resources.ApplyResources(this.txtArrayCount, "txtArrayCount");
-            this.txtArrayCount.Name = "txtArrayCount";
-            // 
-            // txtMesResult
-            // 
-            resources.ApplyResources(this.txtMesResult, "txtMesResult");
-            this.txtMesResult.Name = "txtMesResult";
-            // 
-            // txt1StScan
-            // 
-            resources.ApplyResources(this.txt1StScan, "txt1StScan");
-            this.txt1StScan.Name = "txt1StScan";
-            // 
-            // txtRank2
-            // 
-            resources.ApplyResources(this.txtRank2, "txtRank2");
-            this.txtRank2.Name = "txtRank2";
-            // 
             // Main
             // 
             resources.ApplyResources(this, "$this");
@@ -1073,12 +1073,14 @@
             this.panel16.ResumeLayout(false);
             this.panel18.ResumeLayout(false);
             this.panel22.ResumeLayout(false);
-            ((System.ComponentModel.ISupportInitialize)(this.dataGridView1)).EndInit();
+            ((System.ComponentModel.ISupportInitialize)(this.dgvPrintScanDataTable)).EndInit();
             this.panel19.ResumeLayout(false);
             this.panel24.ResumeLayout(false);
             this.panel32.ResumeLayout(false);
             this.flowLayoutPanel2.ResumeLayout(false);
             this.flowLayoutPanel2.PerformLayout();
+            this.panel36.ResumeLayout(false);
+            this.panel36.PerformLayout();
             this.panel31.ResumeLayout(false);
             this.flowLayoutPanel1.ResumeLayout(false);
             this.panel2.ResumeLayout(false);
@@ -1097,8 +1099,6 @@
             this.panel5.ResumeLayout(false);
             this.panel39.ResumeLayout(false);
             this.panel40.ResumeLayout(false);
-            this.panel36.ResumeLayout(false);
-            this.panel36.PerformLayout();
             this.ResumeLayout(false);
 
         }
@@ -1222,7 +1222,7 @@
         public System.Windows.Forms.TextBox txtRank;
         private System.Windows.Forms.Panel panel33;
         public System.Windows.Forms.DataGridView dgvRank;
-        public System.Windows.Forms.DataGridView dataGridView1;
+        public System.Windows.Forms.DataGridView dgvPrintScanDataTable;
         public System.Windows.Forms.Label lbRankIndex;
         private System.Windows.Forms.Label label13;
         private System.Windows.Forms.Panel panel36;

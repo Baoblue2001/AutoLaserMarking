@@ -70,5 +70,17 @@ namespace SLTtechSoft.Properties {
                 this["Index3"] = value;
             }
         }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("Vietnamese")]
+        public string UiLanguage {
+            get {
+                return ((string)(this["UiLanguage"]));
+            }
+            set {
+                this["UiLanguage"] = value;
+            }
+        }
     }
 }

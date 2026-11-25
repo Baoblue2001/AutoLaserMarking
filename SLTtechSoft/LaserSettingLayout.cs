@@ -1547,29 +1547,77 @@ namespace SLTtechSoft
 
         public void ScanImageClick(object sender, EventArgs e)
         {
+            StartScanImage(null);
+        }
+
+        /// <summary>
+        /// Uses the same capture/save pipeline as the manual Scan button.
+        /// The completion callback fires after the image and model parameters are saved.
+        /// </summary>
+        public bool ScanImageAuto(Action<bool, string> completed)
+        {
+            return StartScanImage(completed);
+        }
+
+        private bool StartScanImage(Action<bool, string> completed)
+        {
             if (string.IsNullOrWhiteSpace(modelFolderPath) || !Directory.Exists(modelFolderPath))
             {
-                MessageBox.Show("Please save or call a Model before scanning images.", "Scan Image", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
+                CompleteScanFailure(completed, "Please save or call a Model before scanning images.");
+                return false;
             }
 
             Action<Action<Bitmap, int, int>> requestHandler = ScanImageRequested;
             if (requestHandler == null)
             {
-                MessageBox.Show("Camera scan is not connected to Form1.", "Scan Image", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
+                CompleteScanFailure(completed, "Camera scan is not connected to Form1.");
+                return false;
             }
 
             LaserSurface surfaceAtRequest = currentSurface;
             string folderAtRequest = modelFolderPath;
             Action<Bitmap, int, int> onCaptured = (capturedImage, servoX, servoY) =>
-                SaveScannedImage(capturedImage, servoX, servoY, surfaceAtRequest, folderAtRequest);
+            {
+                if (capturedImage == null)
+                {
+                    CompleteScanFailure(completed, "Camera did not return an image. Check camera connection and acquisition.");
+                    return;
+                }
+
+                SaveScannedImage(capturedImage, servoX, servoY, surfaceAtRequest, folderAtRequest, completed);
+            };
+
             requestHandler(onCaptured);
+            return true;
         }
 
-        private void SaveScannedImage(Bitmap capturedImage, int servoX, int servoY, LaserSurface surface, string modelFolder)
+        private void CompleteScanFailure(Action<bool, string> completed, string message)
         {
-            if (capturedImage == null) return;
+            if (completed != null)
+            {
+                completed(false, message);
+                return;
+            }
+
+            Action showMessage = () =>
+                MessageBox.Show(message, "Scan Image", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+
+            if (IsDisposed) return;
+            if (InvokeRequired && IsHandleCreated) BeginInvoke(showMessage);
+            else if (!InvokeRequired) showMessage();
+        }
+
+        private void SaveScannedImage(
+            Bitmap capturedImage, int servoX, int servoY,
+            LaserSurface surface, string modelFolder,
+            Action<bool, string> completed)
+        {
+            if (capturedImage == null)
+            {
+                CompleteScanFailure(completed, "Captured image is empty.");
+                return;
+            }
+
             string fullPath = "";
             try
             {
@@ -1592,28 +1640,52 @@ namespace SLTtechSoft
 
                 Action updateUi = () =>
                 {
-                    LaserSurfaceParameter targetParameters = surface == LaserSurface.Top ? topParameters : botParameters;
-                    if (targetParameters.ScanImages == null) targetParameters.ScanImages = new List<LaserScanImageParameter>();
-                    targetParameters.ScanImages.Add(picture);
-
-                    if (currentSurface == surface)
+                    try
                     {
-                        LoadImage(fullPath);
-                        RefreshPictureGrid();
-                    }
+                        LaserSurfaceParameter targetParameters = surface == LaserSurface.Top ? topParameters : botParameters;
+                        if (targetParameters.ScanImages == null) targetParameters.ScanImages = new List<LaserScanImageParameter>();
+                        targetParameters.ScanImages.Add(picture);
 
-                    SaveCurrentSurfaceToMemoryIfSelected(surface);
-                    SaveOneSnapshotForSurface(surface);
+                        if (currentSurface == surface)
+                        {
+                            LoadImage(fullPath);
+                            RefreshPictureGrid();
+                        }
+
+                        SaveCurrentSurfaceToMemoryIfSelected(surface);
+                        SaveOneSnapshotForSurface(surface);
+                        completed?.Invoke(true, "");
+                    }
+                    catch (Exception ex)
+                    {
+                        if (completed != null) completed(false, "Image saved but model UI update failed: " + ex.Message);
+                        else
+                            MessageBox.Show("Could not update scanned image: " + ex.Message, "Scan Image", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
                 };
 
-                if (IsDisposed) return;
+                if (IsDisposed || !IsHandleCreated)
+                {
+                    completed?.Invoke(false, "Laser Setting form is closed before the scan could finish.");
+                    return;
+                }
+
                 if (InvokeRequired) BeginInvoke(updateUi);
                 else updateUi();
             }
             catch (Exception ex)
             {
-                if (!IsDisposed && IsHandleCreated)
-                    BeginInvoke((Action)(() => MessageBox.Show("Could not save scanned image: " + ex.Message, "Scan Image", MessageBoxButtons.OK, MessageBoxIcon.Error)));
+                if (completed != null) completed(false, "Could not save scanned image: " + ex.Message);
+                else
+                {
+                    Action showMessage = () =>
+                        MessageBox.Show("Could not save scanned image: " + ex.Message, "Scan Image", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    if (!IsDisposed && IsHandleCreated)
+                    {
+                        if (InvokeRequired) BeginInvoke(showMessage);
+                        else showMessage();
+                    }
+                }
             }
             finally
             {

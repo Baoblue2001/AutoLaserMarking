@@ -369,6 +369,8 @@ namespace SLTtechSoft
             PLC.Read.AutoBits.Add(PlcDic.StartCheckFiducial);
             PLC.Read.AutoBits.Add(PlcDic.Require_CheckCode);
             PLC.Read.AutoBits.Add(PlcDic.StartCheckCode);
+            PLC.Read.AutoBits.Add(PlcDic.ScanImageTop);
+            PLC.Read.AutoBits.Add(PlcDic.ScanImageBottom);
 
             PLC.Read.WordUshorts.Add(PlcDic.ModelNo);
             PLC.Read.WordIntegers.Add(PlcDic.CurentPosX);
@@ -401,6 +403,8 @@ namespace SLTtechSoft
             PLC.Write.AutoBits.Add(PlcDic.CheckCodeOneDone);
             PLC.Write.AutoBits.Add(PlcDic.CheckCodeALLDone);
             PLC.Write.AutoBits.Add(PlcDic.Result_Code_Exists);
+            PLC.Write.AutoBits.Add(PlcDic.ScanImageTopDone);
+            PLC.Write.AutoBits.Add(PlcDic.ScanImageBottomDone);
 
             PLC.Write.WordUshorts.Add(PlcDic.ModelNo);
             PLC.Write.WordIntegers.Add(PlcDic.MarkingPosX);
@@ -423,6 +427,7 @@ namespace SLTtechSoft
                 }
 
                 ReadDataPLC1();
+                AutoScanImage();
                 WriteDataPLC1();
             }
         }
@@ -553,32 +558,147 @@ namespace SLTtechSoft
             TimeSpan ts2 = StopwatchWritePLC.Elapsed;
             TimeWritePLC = $"{ts2.Seconds}.{PadLeftZeros(ts2.Milliseconds, 3)}";
         }
-        int IndexProcessAutoScan = 0;
+        // Auto Scan state:
+        // 0 = Idle, 1 = Waiting TOP capture/save, 10 = Waiting BOT capture/save,
+        // 2 = Wait PLC request release after success, 3 = Wait PLC request release after failure.
+        private int IndexProcessAutoScan = 0;
+        private int _autoScanCaptureResult = 0; // 0 = pending, 1 = success, -1 = failed
+        private string _autoScanError = "";
+        private DateTime _pendingLaserSetupCaptureAt = DateTime.MinValue;
+
         public void AutoScanImage()
         {
             if (IsTestNoPLC) return;
             if (PLCDevice == null || PLCDevice[0] == null || !PLCDevice[0].IsConnected) return;
-            switch(IndexProcessAutoScan)
+
+            bool requestTop = PLC.Read.AutoBits[PlcDic.ScanImageTop];
+            bool requestBottom = PLC.Read.AutoBits[PlcDic.ScanImageBottom];
+
+            // Fail a pending camera request if no frame arrives within five seconds.
+            Action<Bitmap, int, int> timedOutCapture = null;
+            lock (_laserSetupCaptureSync)
+            {
+                if (_pendingLaserSetupCapture != null &&
+                    _pendingLaserSetupCaptureAt != DateTime.MinValue &&
+                    (DateTime.Now - _pendingLaserSetupCaptureAt).TotalSeconds >= 5)
+                {
+                    timedOutCapture = _pendingLaserSetupCapture;
+                    _pendingLaserSetupCapture = null;
+                    _pendingLaserSetupCaptureCamera = -1;
+                    _pendingLaserSetupCaptureAt = DateTime.MinValue;
+                }
+            }
+            if (timedOutCapture != null)
+                timedOutCapture(null, 0, 0);
+
+            switch (IndexProcessAutoScan)
             {
                 case 0:
-                   if(PLC.Read.AutoBits[PlcDic.ScanImageTop]&&!PLC.Read.AutoBits[PlcDic.ScanImageBottom])
+                    // Accept one surface request at a time.
+                    if (requestTop && !requestBottom)
                     {
-                        formModel.laserSettingLayout.SwitchSurface(LaserSettingLayout.LaserSurface.Top);
+                        PLC.Write.AutoBits[PlcDic.ScanImageTopDone] = false;
+                        PLC.Write.AutoBits[PlcDic.ScanImageBottomDone] = false;
+                        Interlocked.Exchange(ref _autoScanCaptureResult, 0);
+                        _autoScanError = "";
                         IndexProcessAutoScan = 1;
+
+                        Ui(() =>
+                        {
+                            try
+                            {
+                                if (formModel == null || formModel.laserSettingLayout == null)
+                                    throw new InvalidOperationException("Laser Setting form is not initialized.");
+
+                                formModel.laserSettingLayout.SwitchSurface(LaserSettingLayout.LaserSurface.Top);
+                                if (!formModel.laserSettingLayout.ScanImageAuto((success, message) =>
+                                {
+                                    _autoScanError = message ?? "";
+                                    Interlocked.Exchange(ref _autoScanCaptureResult, success ? 1 : -1);
+                                }))
+                                {
+                                    _autoScanError = "Could not start TOP image scan.";
+                                    Interlocked.Exchange(ref _autoScanCaptureResult, -1);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _autoScanError = ex.Message;
+                                Interlocked.Exchange(ref _autoScanCaptureResult, -1);
+                                WriteLogPC(LogType.Vision, "Auto Scan TOP", ex.ToString());
+                            }
+                        });
                     }
-                   else if (PLC.Read.AutoBits[PlcDic.ScanImageBottom]&&!PLC.Read.AutoBits[PlcDic.ScanImageTop])
+                    else if (requestBottom && !requestTop)
                     {
-                        formModel.laserSettingLayout.SwitchSurface(LaserSettingLayout.LaserSurface.Bot);
+                        PLC.Write.AutoBits[PlcDic.ScanImageTopDone] = false;
+                        PLC.Write.AutoBits[PlcDic.ScanImageBottomDone] = false;
+                        Interlocked.Exchange(ref _autoScanCaptureResult, 0);
+                        _autoScanError = "";
                         IndexProcessAutoScan = 10;
+
+                        Ui(() =>
+                        {
+                            try
+                            {
+                                if (formModel == null || formModel.laserSettingLayout == null)
+                                    throw new InvalidOperationException("Laser Setting form is not initialized.");
+
+                                formModel.laserSettingLayout.SwitchSurface(LaserSettingLayout.LaserSurface.Bot);
+                                if (!formModel.laserSettingLayout.ScanImageAuto((success, message) =>
+                                {
+                                    _autoScanError = message ?? "";
+                                    Interlocked.Exchange(ref _autoScanCaptureResult, success ? 1 : -1);
+                                }))
+                                {
+                                    _autoScanError = "Could not start BOTTOM image scan.";
+                                    Interlocked.Exchange(ref _autoScanCaptureResult, -1);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _autoScanError = ex.Message;
+                                Interlocked.Exchange(ref _autoScanCaptureResult, -1);
+                                WriteLogPC(LogType.Vision, "Auto Scan BOTTOM", ex.ToString());
+                            }
+                        });
                     }
-                    break;
-                case 1:
-                    //formModel.laserSettingLayout.ScanImageClick();
-                    break;
-                case 10:
-                    //formModel.laserSettingLayout.ScanImageClick();
                     break;
 
+                case 1:
+                case 10:
+                    int captureResult = Interlocked.Exchange(ref _autoScanCaptureResult, 0);
+                    if (captureResult == 1)
+                    {
+                        if (IndexProcessAutoScan == 1)
+                            PLC.Write.AutoBits[PlcDic.ScanImageTopDone] = true;
+                        else
+                            PLC.Write.AutoBits[PlcDic.ScanImageBottomDone] = true;
+
+                        WriteLogPC(LogType.Vision, "Auto Scan",
+                            IndexProcessAutoScan == 1 ? "TOP image captured and saved successfully." : "BOTTOM image captured and saved successfully.");
+                        IndexProcessAutoScan = 2;
+                    }
+                    else if (captureResult == -1)
+                    {
+                        PLC.Write.AutoBits[PlcDic.ScanImageTopDone] = false;
+                        PLC.Write.AutoBits[PlcDic.ScanImageBottomDone] = false;
+                        WriteLogPC(LogType.Vision, "Auto Scan",
+                            "Scan failed: " + (string.IsNullOrWhiteSpace(_autoScanError) ? "Unknown capture/save error." : _autoScanError));
+                        IndexProcessAutoScan = 3;
+                    }
+                    break;
+
+                case 2:
+                case 3:
+                    // Hold the Done bit until PLC releases both request bits.
+                    if (!requestTop && !requestBottom)
+                    {
+                        PLC.Write.AutoBits[PlcDic.ScanImageTopDone] = false;
+                        PLC.Write.AutoBits[PlcDic.ScanImageBottomDone] = false;
+                        IndexProcessAutoScan = 0;
+                    }
+                    break;
             }
         }
         private void Ui(Action action)
@@ -1229,6 +1349,7 @@ namespace SLTtechSoft
                 if (_pendingLaserSetupCapture != null) return false;
                 _pendingLaserSetupCapture = onCaptured;
                 _pendingLaserSetupCaptureCamera = cameraIndex;
+                _pendingLaserSetupCaptureAt = DateTime.Now;
             }
 
             // Continuous mode: use the next incoming frame. Software-trigger mode: request one frame.
@@ -1251,6 +1372,7 @@ namespace SLTtechSoft
                     scanCallback = _pendingLaserSetupCapture;
                     _pendingLaserSetupCapture = null;
                     _pendingLaserSetupCaptureCamera = -1;
+                    _pendingLaserSetupCaptureAt = DateTime.MinValue;
                 }
             }
 
@@ -1269,6 +1391,9 @@ namespace SLTtechSoft
                 catch (Exception ex)
                 {
                     WriteLogPC(LogType.Vision, "Laser Setup Scan", ex.Message);
+                    // The pending request has already been consumed. Notify the caller so
+                    // Auto Scan cannot remain in its waiting state after a frame-processing error.
+                    try { scanCallback(null, 0, 0); } catch { }
                 }
                 finally
                 {

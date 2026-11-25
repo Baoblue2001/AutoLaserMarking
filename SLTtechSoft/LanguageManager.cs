@@ -293,7 +293,7 @@ namespace SLTtechSoft
 
             control.TextChanged += (sender, e) =>
             {
-                if (_isApplying) return;
+                if (_isApplying || IsEditableInput(control)) return;
                 string translated = Translate(control.Text, _language);
                 if (translated == null || translated == control.Text) return;
 
@@ -323,7 +323,7 @@ namespace SLTtechSoft
         {
             if (control == null) return;
 
-            string translated = Translate(control.Text, _language);
+            string translated = IsEditableInput(control) ? null : Translate(control.Text, _language);
             if (translated != null && translated != control.Text)
             {
                 try
@@ -371,6 +371,11 @@ namespace SLTtechSoft
                 ToolStripDropDownItem dropDown = item as ToolStripDropDownItem;
                 if (dropDown != null) ApplyToolStripItems(dropDown.DropDownItems);
             }
+        }
+
+        private static bool IsEditableInput(Control control)
+        {
+            return control is TextBoxBase || control is ComboBox || control is NumericUpDown;
         }
 
         private static string Translate(string text, AppLanguage language)

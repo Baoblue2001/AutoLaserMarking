@@ -42,6 +42,16 @@ namespace SLTtechSoft
             Add("AcqTime:", "Thời gian chụp:", "획득 시간:");
             Add("PLC 1", "PLC 1", "PLC 1");
             Add("PLC 2", "PLC 2", "PLC 2");
+            Add("CAM 1", "CAM 1", "카메라 1");
+            Add("CAM 2", "CAM 2", "카메라 2");
+            Add("CAM 3", "CAM 3", "카메라 3");
+            Add("CAM 4", "CAM 4", "카메라 4");
+            Add("PC - PLC", "PC - PLC", "PC → PLC");
+            Add("PLC-PC", "PLC - PC", "PLC → PC");
+            Add("Main", "Màn hình chính", "메인");
+            Add("Model", "Model", "모델");
+            Add("FormIO", "I/O", "I/O");
+            Add("FormOption", "Cài đặt", "설정");
 
             Add("LOT:", "LOT:", "LOT:");
             Add("Quality ALL", "Tổng chất lượng", "전체 품질");
@@ -209,7 +219,7 @@ namespace SLTtechSoft
             Add("Add Pattern", "Thêm Pattern", "패턴 추가");
             Add("Select Pattern", "Chọn Pattern", "패턴 선택");
             Add("Total Patterns", "Tổng số Pattern", "전체 패턴 수");
-            Add("Model Name", "Tên Model", "모델 이름");
+            Add("Model Name", "Tên Model", "모델명");
             Add("Create Model", "Tạo Model", "모델 생성");
             Add("Save MODEL", "Lưu MODEL", "모델 저장");
             Add("Use MODEL", "Sử dụng MODEL", "모델 사용");

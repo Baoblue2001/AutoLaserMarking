@@ -14,5 +14,8 @@
     <Setting Name="Index3" Type="System.Int32" Scope="User">
       <Value Profile="(Default)">0</Value>
     </Setting>
+    <Setting Name="UiLanguage" Type="System.String" Scope="User">
+      <Value Profile="(Default)">Vietnamese</Value>
+    </Setting>
   </Settings>
 </SettingsFile>

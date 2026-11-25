@@ -85,6 +85,121 @@ namespace SLTtechSoft
             InitializeVision();
             InitialDevice();
             InitialUI();
+
+            InitializeLanguageSelector();
+            AppLanguage savedLanguage = LanguageManager.Parse(Properties.Settings.Default.UiLanguage);
+            ChangeLanguage(savedLanguage, false);
+        }
+
+        private ContextMenuStrip _languageMenu;
+        private PictureBox _languageFlag;
+        private Label _languageCaption;
+        private AppLanguage _currentLanguage = AppLanguage.Vietnamese;
+
+        private void InitializeLanguageSelector()
+        {
+            if (pnLangue == null) return;
+
+            pnLangue.Controls.Clear();
+            pnLangue.BackgroundImage = null;
+            pnLangue.BackColor = Color.FromArgb(214, 234, 248);
+            pnLangue.Size = new Size(170, 40);
+            pnLangue.Cursor = Cursors.Hand;
+
+            _languageFlag = new PictureBox
+            {
+                Name = "picCurrentLanguage",
+                Location = new Point(8, 6),
+                Size = new Size(42, 28),
+                SizeMode = PictureBoxSizeMode.Zoom,
+                BackColor = Color.Transparent,
+                Cursor = Cursors.Hand
+            };
+
+            _languageCaption = new Label
+            {
+                Name = "lblCurrentLanguage",
+                Location = new Point(58, 0),
+                Size = new Size(106, 40),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(35, 45, 55),
+                BackColor = Color.Transparent,
+                Cursor = Cursors.Hand
+            };
+
+            pnLangue.Controls.Add(_languageFlag);
+            pnLangue.Controls.Add(_languageCaption);
+
+            _languageMenu = new ContextMenuStrip
+            {
+                ImageScalingSize = new Size(42, 28),
+                Font = new Font("Segoe UI", 10f)
+            };
+
+            AddLanguageMenuItem("Tiếng Việt", Properties.Resources.vietnam, AppLanguage.Vietnamese);
+            AddLanguageMenuItem("English", Properties.Resources.English, AppLanguage.English);
+            AddLanguageMenuItem("한국어", Properties.Resources.images, AppLanguage.Korean);
+
+            pnLangue.Click += LanguageSelector_Click;
+            _languageFlag.Click += LanguageSelector_Click;
+            _languageCaption.Click += LanguageSelector_Click;
+        }
+
+        private void AddLanguageMenuItem(string caption, Image flag, AppLanguage language)
+        {
+            ToolStripMenuItem item = new ToolStripMenuItem(caption)
+            {
+                Image = flag,
+                Tag = language,
+                ImageScaling = ToolStripItemImageScaling.SizeToFit
+            };
+            item.Click += (sender, e) => ChangeLanguage((AppLanguage)((ToolStripMenuItem)sender).Tag, true);
+            _languageMenu.Items.Add(item);
+        }
+
+        private void LanguageSelector_Click(object sender, EventArgs e)
+        {
+            if (_languageMenu != null && pnLangue != null)
+                _languageMenu.Show(pnLangue, new Point(0, pnLangue.Height));
+        }
+
+        private void ChangeLanguage(AppLanguage language, bool save)
+        {
+            _currentLanguage = language;
+            LanguageManager.Apply(this, language);
+
+            if (_languageFlag != null)
+            {
+                switch (language)
+                {
+                    case AppLanguage.English:
+                        _languageFlag.Image = Properties.Resources.English;
+                        break;
+                    case AppLanguage.Korean:
+                        _languageFlag.Image = Properties.Resources.images;
+                        break;
+                    default:
+                        _languageFlag.Image = Properties.Resources.vietnam;
+                        break;
+                }
+            }
+
+            if (_languageCaption != null)
+                _languageCaption.Text = LanguageManager.GetLanguageName(language) + "  ▼";
+
+            if (save)
+            {
+                try
+                {
+                    Properties.Settings.Default.UiLanguage = language.ToString();
+                    Properties.Settings.Default.Save();
+                }
+                catch (Exception ex)
+                {
+                    WriteLogPC(LogType.Main, "Language", "Could not save language preference: " + ex.Message);
+                }
+            }
         }
         private void InitialDevice()
         {

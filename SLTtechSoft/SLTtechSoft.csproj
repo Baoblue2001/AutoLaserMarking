@@ -255,6 +255,7 @@
     <Compile Include="LaserSettingLayout.Designer.cs">
       <DependentUpon>LaserSettingLayout.cs</DependentUpon>
     </Compile>
+    <Compile Include="LanguageManager.cs" />
     <Compile Include="Login.cs">
       <SubType>Form</SubType>
     </Compile>

@@ -27,7 +27,7 @@ namespace SLTtechSoft
 
         static LanguageManager()
         {
-            Add("MEASUREMENT VISION MACHINE", "HỆ THỐNG ĐO KIỂM VISION", "비전 측정 시스템");
+            Add("LASERMARKING MACHINE", "HỆ THỐNG LAZER CHẤP", "레이저 마킹 시스템");
             Add("MAIN", "CHÍNH", "메인");
             Add("MODEL", "MODEL", "모델");
             Add("I/O", "I/O", "I/O");

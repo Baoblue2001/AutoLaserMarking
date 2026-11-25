@@ -940,7 +940,6 @@
             // 
             // pnLangue
             // 
-            this.pnLangue.BackgroundImage = global::SLTtechSoft.Properties.Resources.uploads_2022_th_c3_a1ng_208_ng_c3_a0y_31_nga_quockyvietnam_copy_7814;
             this.pnLangue.BackgroundImageLayout = System.Windows.Forms.ImageLayout.Stretch;
             this.pnLangue.Dock = System.Windows.Forms.DockStyle.Right;
             this.pnLangue.Location = new System.Drawing.Point(955, 0);
@@ -1037,7 +1036,7 @@
             this.Margin = new System.Windows.Forms.Padding(2);
             this.Name = "Form1";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
-            this.Text = "MEASUREMENT VISION MACHINE";
+            this.Text = "LASERMARKING MACHINE";
             this.WindowState = System.Windows.Forms.FormWindowState.Maximized;
             this.FormClosing += new System.Windows.Forms.FormClosingEventHandler(this.Form1_FormClosing);
             this.Load += new System.EventHandler(this.Form1_Load);

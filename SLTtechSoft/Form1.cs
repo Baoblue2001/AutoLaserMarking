@@ -20,6 +20,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Forms;
 using WindowsFormsApp1;
@@ -546,6 +547,7 @@ namespace SLTtechSoft
 
                 ReadDataPLC1();
                 AutoCheckFiducial();
+                AutoMarkingProcess();
                 AutoScanImage();
                 WriteDataPLC1();
             }
@@ -2935,7 +2937,7 @@ namespace SLTtechSoft
                         _autoFiducialIndex = 0;
                         _autoFiducialCount = 0;
                         _autoFiducialResults.Clear();
-                        AutoFiducialOffset = PointF.Empty;
+                        // Keep the measured offset for the following Auto Marking cycle.
                         _autoFiducialState = 0;
                     }
                     break;
@@ -3153,6 +3155,375 @@ namespace SLTtechSoft
             WriteLogPC(LogType.Vision, "Auto Fiducial NG",
                 string.IsNullOrWhiteSpace(error) ? "Unknown Fiducial inspection error." : error);
         }
+
+
+        // Auto Marking process adapted from the reference machine sequence.
+        // Separate from ProcessIndex[] which is reserved for camera acquisition states.
+        public int AutoMarkingProcessIndex = 0;
+        public double AutoPrinterWaitTimeoutSeconds = 30.0;
+        private Task<DataInfomationSend> _autoMesRequestTask;
+        private DateTime _autoPrinterWaitStarted;
+        private int _autoMarkingCount;
+        private bool AutoMarkingMesReady;
+        private bool _autoMarkingErrorLogged;
+
+        private void AutoMarkingProcess()
+        {
+            if (IsTestNoPLC || MachineMode != ModeMachine.Auto ||
+                PLCDevice == null || PLCDevice[0] == null || !PLCDevice[0].IsConnected)
+                return;
+
+            bool start = PLC.Read.AutoBits[PlcDic.StartMarkingProcess];
+
+            // PLC abort/reset. Do not leave any command latched.
+            if (!start && AutoMarkingProcessIndex != 0 && AutoMarkingProcessIndex != 55)
+            {
+                AutoResetMarkingProcess("PLC released StartMarkingProcess.");
+                return;
+            }
+
+            switch (AutoMarkingProcessIndex)
+            {
+                case 0:
+                    if (!start) return;
+                    if (!AutoMarkingMesReady)
+                    {
+                        if (!AutoPrepareMesData()) return;
+                        AutoMarkingMesReady = true;
+                    }
+                    AutoMarkingProcessIndex = 5;
+                    break;
+
+                case 5:
+                    IndexPatternAuto = 0;
+                    RankIndex = 0;
+                    if (!AutoTryGetMarkingCount(out _autoMarkingCount))
+                    {
+                        AutoFailMarkingProcess("Could not read the Marking list from the active Model.");
+                        return;
+                    }
+                    if (_autoMarkingCount <= 0)
+                    {
+                        AutoFailMarkingProcess("The active Model has no Marking items.");
+                        return;
+                    }
+                    PLC.Write.AutoBits[PlcDic.Restart_Marking] = false;
+                    PLC.Write.AutoBits[PlcDic.WriteDataToPlcDone] = false;
+                    PLC.Write.AutoBits[PlcDic.MarkingStart] = false;
+                    PLC.Write.AutoBits[PlcDic.MarkingComplete] = false;
+                    AutoMarkingProcessIndex = 10;
+                    WriteLogPC(LogType.Main, "Auto Marking",
+                        "Cycle started. Marking count=" + _autoMarkingCount);
+                    break;
+
+                case 10:
+                    if (IndexPatternAuto >= _autoMarkingCount)
+                    {
+                        AutoMarkingProcessIndex = 30;
+                        break;
+                    }
+
+                    PointF teachPosition;
+                    string coordinateError;
+                    if (!AutoTryGetMarkingTeachPoint(IndexPatternAuto, out teachPosition, out coordinateError))
+                    {
+                        AutoFailMarkingProcess(coordinateError);
+                        return;
+                    }
+
+                    // Apply the translation calculated by the Fiducial process.
+                    PointF correctedPosition = AutoApplyFiducialOffsetXY(teachPosition, AutoFiducialOffset);
+                    if (!AutoWriteMarkingCoordinates(correctedPosition))
+                    {
+                        AutoFailMarkingProcess("Marking coordinate is outside the supported PLC integer range.");
+                        return;
+                    }
+
+                    // Printer_HandleDataReceived uses this index to select the same Marking item.
+                    PLC.Write.AutoBits[PlcDic.Restart_Marking] = false;
+                    PLC.Write.AutoBits[PlcDic.MarkingStart] = false;
+                    PLC.Write.AutoBits[PlcDic.MarkingComplete] = false;
+                    PLC.Write.AutoBits[PlcDic.WriteDataToPlcDone] = true;
+                    _autoPrinterWaitStarted = DateTime.Now;
+                    _autoMarkingErrorLogged = false;
+                    AutoMarkingProcessIndex = 15;
+
+                    WriteLogPC(LogType.Main, "Auto Marking",
+                        "Prepared Marking " + (IndexPatternAuto + 1) +
+                        "/" + _autoMarkingCount +
+                        " at X=" + correctedPosition.X.ToString("0.###") +
+                        ", Y=" + correctedPosition.Y.ToString("0.###"));
+                    break;
+
+                case 15:
+                    // The EzCard/Printer TCP service remains responsible for responding to
+                    // CODE/TEXT requests using IndexPatternAuto. Wait for its connection
+                    // before allowing the PLC to start the current marking item.
+                    if (!IsTestNoPrint && (Printerclient == null || !Printerclient.Connected))
+                    {
+                        if ((DateTime.Now - _autoPrinterWaitStarted).TotalSeconds >=
+                            Math.Max(1.0, AutoPrinterWaitTimeoutSeconds))
+                            AutoFailMarkingProcess("Timed out waiting for EzCard/Printer TCP connection.");
+                        return;
+                    }
+                    AutoMarkingProcessIndex = 16;
+                    break;
+
+                case 16:
+                    // Same handshake condition as the reference machine:
+                    // PLC has accepted the data, or has released MarkingOneDone.
+                    if (PLC.Read.AutoBits[PlcDic.MarkingStartConfirm] ||
+                        !PLC.Read.AutoBits[PlcDic.MarkingOneDone])
+                        AutoMarkingProcessIndex = 17;
+                    break;
+
+                case 17:
+                    PLC.Write.AutoBits[PlcDic.MarkingStart] = true;
+                    PLC.Write.AutoBits[PlcDic.WriteDataToPlcDone] = false;
+                    PLC.Write.AutoBits[PlcDic.Restart_Marking] = false;
+                    AutoMarkingProcessIndex = 20;
+                    break;
+
+                case 20:
+                    if (PLC.Read.AutoBits[PlcDic.MarkingOneDone])
+                    {
+                        PLC.Write.AutoBits[PlcDic.MarkingStart] = false;
+                        AutoMarkingProcessIndex = 21;
+                    }
+                    break;
+
+                case 21:
+                    if (!PLC.Read.AutoBits[PlcDic.MarkingOneDone])
+                    {
+                        IndexPatternAuto++;
+                        PLC.Write.AutoBits[PlcDic.Restart_Marking] = false;
+                        AutoMarkingProcessIndex = 25;
+                    }
+                    break;
+
+                case 25:
+                    AutoMarkingProcessIndex =
+                        IndexPatternAuto < _autoMarkingCount ? 10 : 30;
+                    break;
+
+                case 30:
+                    PLC.Write.AutoBits[PlcDic.MarkingStart] = false;
+                    PLC.Write.AutoBits[PlcDic.WriteDataToPlcDone] = false;
+                    PLC.Write.AutoBits[PlcDic.MarkingComplete] = true;
+                    AutoMarkingProcessIndex = 35;
+                    WriteLogPC(LogType.Main, "Auto Marking", "All Marking items completed.");
+                    break;
+
+                case 35:
+                    if (PLC.Read.AutoBits[PlcDic.MarkingCompleteConfirm])
+                    {
+                        PLC.Write.AutoBits[PlcDic.MarkingComplete] = false;
+                        AutoMarkingProcessIndex = 55;
+                    }
+                    break;
+
+                case 55:
+                    if (!start)
+                    {
+                        AutoResetMarkingProcess("Marking cycle completed and PLC released StartMarkingProcess.");
+                    }
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// MES is requested asynchronously so the PLC communication loop is not blocked
+        /// by the MES TCP timeout. Existing Main.GetDataInfomationSerialno remains the
+        /// offline-mode implementation and UI presentation path.
+        /// </summary>
+        private bool AutoPrepareMesData()
+        {
+            bool mesEnabled = formOption != null && formOption.Parameters != null &&
+                              formOption.Parameters.MES.MesEnabel;
+
+            if (!mesEnabled)
+            {
+                try
+                {
+                    Func<bool> getOffline = () => formMain != null && formMain.GetDataInfomationSerialno();
+                    return InvokeRequired ? (bool)Invoke(getOffline) : getOffline();
+                }
+                catch (Exception ex)
+                {
+                    AutoFailMarkingProcess("Offline MES preparation failed: " + ex.Message);
+                    return false;
+                }
+            }
+
+            if (_autoMesRequestTask == null)
+            {
+                string lotNo = "";
+                try
+                {
+                    Func<string> readLot = () => formMain == null ? CurrentLotNo : formMain.txtLotNo.Text.Trim();
+                    lotNo = InvokeRequired ? (string)Invoke(readLot) : readLot();
+                }
+                catch (Exception ex)
+                {
+                    AutoFailMarkingProcess("Could not read Lot No from the Main screen: " + ex.Message);
+                    return false;
+                }
+
+                if (string.IsNullOrWhiteSpace(lotNo)) lotNo = CurrentLotNo;
+                if (string.IsNullOrWhiteSpace(lotNo))
+                {
+                    AutoFailMarkingProcess("Lot No is empty. Enter a Lot No before starting Auto.");
+                    return false;
+                }
+
+                CurrentLotNo = lotNo;
+                _autoMesRequestTask = Task.Run(() => MES.DataInformationRequest(lotNo));
+                return false;
+            }
+
+            if (!_autoMesRequestTask.IsCompleted) return false;
+
+            DataInfomationSend response = null;
+            try
+            {
+                response = _autoMesRequestTask.GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                _autoMesRequestTask = null;
+                AutoFailMarkingProcess("MES request failed: " + ex.Message);
+                return false;
+            }
+            _autoMesRequestTask = null;
+
+            if (response == null || !string.IsNullOrEmpty(MES.ExceptionCode))
+            {
+                AutoFailMarkingProcess("MES did not return valid Lot information: " +
+                    (string.IsNullOrEmpty(MES.ExceptionCode) ? "Empty response." : MES.ExceptionCode));
+                return false;
+            }
+
+            MesDataInfomation = response;
+            RankIndex = 0;
+            try
+            {
+                Action updateUi = () =>
+                {
+                    formMain.txtYMMDDN.Text = response.YMMDDN ?? "";
+                    formMain.txtSerialNo.Text = response.SerialNo ?? "";
+                    formMain.txt1STbarcode.Text = response.Code ?? "";
+                    formMain.txtArrayCount.Text = response.Array.ToString();
+                    formMain.dgvRank.Rows.Clear();
+                    if (response.Rank != null)
+                    {
+                        foreach (string rank in response.Rank)
+                            formMain.dgvRank.Rows.Add(rank);
+                    }
+                    if (response.Rank != null && response.Rank.Length > 0)
+                        formMain.txtRank.Text = response.Rank[0] ?? "";
+                    if (response.Rank != null && response.Rank.Length > 1)
+                        formMain.txtRank2.Text = response.Rank[1] ?? "";
+                    formMain.txtMesResult.Text = "MES Online. Get data infomation OK.";
+                    formMain.txtMesResult.BackColor = Color.LawnGreen;
+                };
+                if (InvokeRequired) Invoke(updateUi); else updateUi();
+            }
+            catch (Exception ex)
+            {
+                AutoFailMarkingProcess("MES data was received but could not be applied to the Main screen: " + ex.Message);
+                return false;
+            }
+
+            WriteLogPC(LogType.Mes, "MES", "MES Lot information received for Lot " + lotNoSafe(response));
+            return true;
+        }
+
+        private static string lotNoSafe(DataInfomationSend data)
+        {
+            return data == null ? "" : (data.Code ?? "");
+        }
+
+        private bool AutoTryGetMarkingCount(out int count)
+        {
+            count = 0;
+            if (formModel == null || formModel.laserSettingLayout == null) return false;
+            try
+            {
+                Func<int> read = () =>
+                {
+                    formModel.laserSettingLayout.SaveCurrentSurfaceToMemory();
+                    return formModel.laserSettingLayout.markings == null
+                        ? 0 : formModel.laserSettingLayout.markings.Count;
+                };
+                count = InvokeRequired ? (int)Invoke(read) : read();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                WriteLogPC(LogType.Main, "Auto Marking", ex.Message);
+                return false;
+            }
+        }
+
+        private bool AutoTryGetMarkingTeachPoint(int index, out PointF position, out string error)
+        {
+            position = PointF.Empty;
+            error = "";
+            if (formModel == null || formModel.laserSettingLayout == null)
+            {
+                error = "Laser Setting Model is not initialized.";
+                return false;
+            }
+
+            try
+            {
+                PointF local = PointF.Empty;
+                Func<bool> read = () => formModel.laserSettingLayout.TryGetAutoMarkingMachinePosition(index, out local);
+                bool valid = InvokeRequired ? (bool)Invoke(read) : read();
+                position = local;
+                if (!valid) error = "Could not read machine coordinates for Marking index " + index + ".";
+                return valid;
+            }
+            catch (Exception ex)
+            {
+                error = "Could not read Marking coordinates: " + ex.Message;
+                return false;
+            }
+        }
+
+        private void AutoFailMarkingProcess(string message)
+        {
+            PLC.Write.AutoBits[PlcDic.WriteDataToPlcDone] = false;
+            PLC.Write.AutoBits[PlcDic.MarkingStart] = false;
+            PLC.Write.AutoBits[PlcDic.Restart_Marking] = false;
+            PLC.Write.AutoBits[PlcDic.MarkingComplete] = false;
+            if (!_autoMarkingErrorLogged)
+            {
+                WriteLogPC(LogType.Main, "Auto Marking NG", message);
+                _autoMarkingErrorLogged = true;
+            }
+            // Hold at idle until PLC drops StartMarkingProcess; no false completion is sent.
+            AutoMarkingProcessIndex = 0;
+            _autoMesRequestTask = null;
+            AutoMarkingMesReady = false;
+        }
+
+        private void AutoResetMarkingProcess(string reason)
+        {
+            PLC.Write.AutoBits[PlcDic.WriteDataToPlcDone] = false;
+            PLC.Write.AutoBits[PlcDic.MarkingStart] = false;
+            PLC.Write.AutoBits[PlcDic.Restart_Marking] = false;
+            PLC.Write.AutoBits[PlcDic.MarkingComplete] = false;
+            AutoMarkingProcessIndex = 0;
+            IndexPatternAuto = 0;
+            _autoMarkingCount = 0;
+            _autoMesRequestTask = null;
+            _autoMesRequestStarted = false;
+            AutoMarkingMesReady = false;
+            AutoFiducialOffset = PointF.Empty;
+            WriteLogPC(LogType.Main, "Auto Marking", reason);
+        }
+
 
         #endregion AUTO LASER MARKING - SHARED CORE
 

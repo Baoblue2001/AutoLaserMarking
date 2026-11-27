@@ -2629,7 +2629,6 @@ namespace SLTtechSoft
                 error = "VisionMaster Y output was not found or is not numeric: " + AutoFiducialYOutputName;
                 return false;
             }
-            VisionMasterProcess process = _VisionSystem[cameraIndex].VisionProcesses[processIndex];
             if (x < 0 || y < 0 || x > float.MaxValue || y > float.MaxValue ||
                 process.LastInputWidth <= 0 || process.LastInputHeight <= 0 ||
                 x >= process.LastInputWidth || y >= process.LastInputHeight)

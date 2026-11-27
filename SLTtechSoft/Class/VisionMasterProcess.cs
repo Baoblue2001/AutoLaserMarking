@@ -131,6 +131,75 @@ namespace SLTtechSoft.Class
             return result;
         }
 
+        /// <summary>
+        /// Reads a numeric output from the most recently executed VisionMaster procedure.
+        /// The output name must match the name configured in the .prc file.
+        /// </summary>
+        public bool TryGetNumericOutput(string outputName, out double value)
+        {
+            value = 0d;
+            if (_disposed || Procedure == null || string.IsNullOrWhiteSpace(outputName))
+                return false;
+
+            object resultObject = Procedure.ModuResult;
+            if (resultObject == null) return false;
+
+            object rawValue = GetPropertyOrFieldValue(resultObject, outputName);
+            if (rawValue == null)
+            {
+                foreach (string methodName in new[]
+                {
+                    "GetOutputDouble", "GetOutputFloat", "GetOutputInt",
+                    "GetOutputLong", "GetOutputString"
+                })
+                {
+                    try
+                    {
+                        MethodInfo method = resultObject.GetType().GetMethod(
+                            methodName, new[] { typeof(string) });
+                        if (method == null) continue;
+
+                        rawValue = method.Invoke(resultObject, new object[] { outputName });
+                        if (rawValue != null) break;
+                    }
+                    catch { }
+                }
+            }
+
+            return TryConvertOutputDouble(rawValue, out value);
+        }
+
+        private static bool TryConvertOutputDouble(object rawValue, out double value)
+        {
+            value = 0d;
+            if (rawValue == null) return false;
+
+            try
+            {
+                if (rawValue is IConvertible && !(rawValue is string))
+                {
+                    value = Convert.ToDouble(rawValue, CultureInfo.InvariantCulture);
+                    return !double.IsNaN(value) && !double.IsInfinity(value);
+                }
+            }
+            catch { }
+
+            string text;
+            if (!TryExtractString(rawValue, out text, 0) || string.IsNullOrWhiteSpace(text))
+            {
+                object nestedValue = GetPropertyOrFieldValue(rawValue, "Value");
+                if (nestedValue != null && !ReferenceEquals(nestedValue, rawValue))
+                    return TryConvertOutputDouble(nestedValue, out value);
+                return false;
+            }
+
+            return (double.TryParse(text.Trim(), NumberStyles.Float,
+                        CultureInfo.InvariantCulture, out value) ||
+                    double.TryParse(text.Trim(), NumberStyles.Float,
+                        CultureInfo.CurrentCulture, out value)) &&
+                   !double.IsNaN(value) && !double.IsInfinity(value);
+        }
+
         private ImageSourceModuleCs.ImageSourceModuleTool _imageSourceModule;
         public string ImageSourceModuleName { get; private set; } = "";
 

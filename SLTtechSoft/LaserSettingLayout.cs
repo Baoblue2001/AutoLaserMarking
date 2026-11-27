@@ -556,6 +556,74 @@ namespace SLTtechSoft
             get { return currentSurface == LaserSurface.Top ? topParameters : botParameters; }
         }
 
+        public LaserSurface CurrentSurface
+        {
+            get { return currentSurface; }
+        }
+
+        /// <summary>
+        /// Returns the machine coordinate of a saved Fiducial row on the active surface.
+        /// The returned coordinate uses the same servo/mm-per-pixel transform as the Model UI.
+        /// Call on the WinForms UI thread.
+        /// </summary>
+        public bool TryGetAutoFiducialMachinePosition(
+            int index, out int fiducialId, out PointF machinePosition, out int fiducialCount)
+        {
+            SaveCurrentSurfaceToMemory();
+            fiducialId = -1;
+            machinePosition = PointF.Empty;
+            fiducialCount = fiducials == null ? 0 : fiducials.Count;
+
+            if (fiducials == null || index < 0 || index >= fiducials.Count)
+                return false;
+
+            FiducialItem item = fiducials[index];
+            if (item == null) return false;
+
+            PointF position = GetFiducialCoordinates(item);
+            if (float.IsNaN(position.X) || float.IsInfinity(position.X) ||
+                float.IsNaN(position.Y) || float.IsInfinity(position.Y))
+                return false;
+
+            fiducialId = item.Id;
+            machinePosition = position;
+            return true;
+        }
+
+        /// <summary>
+        /// Converts a Fiducial pixel in the current camera frame into machine coordinates
+        /// using the active surface's ImagePixelToMM and servo-axis transform settings.
+        /// </summary>
+        public bool TryConvertAutoFramePixelToMachine(
+            int servoX, int servoY, int imageWidth, int imageHeight,
+            double pixelX, double pixelY, out PointF machinePosition)
+        {
+            SaveCurrentSurfaceToMemory();
+            machinePosition = PointF.Empty;
+
+            if (imageWidth <= 0 || imageHeight <= 0 ||
+                double.IsNaN(pixelX) || double.IsInfinity(pixelX) ||
+                double.IsNaN(pixelY) || double.IsInfinity(pixelY))
+                return false;
+
+            double scale = CurrentParameters.ImagePixelToMM;
+            if (scale <= 0 || double.IsNaN(scale) || double.IsInfinity(scale))
+                return false;
+
+            LaserScanImageParameter framePosition = new LaserScanImageParameter
+            {
+                ServoX = servoX,
+                ServoY = servoY
+            };
+
+            machinePosition = GetServoImageMachinePoint(
+                CurrentParameters, framePosition, imageWidth, imageHeight,
+                scale, pixelX, pixelY);
+
+            return !float.IsNaN(machinePosition.X) && !float.IsInfinity(machinePosition.X) &&
+                   !float.IsNaN(machinePosition.Y) && !float.IsInfinity(machinePosition.Y);
+        }
+
         public void SetModelFolderPath(string folderPath)
         {
             modelFolderPath = folderPath ?? "";

@@ -2247,15 +2247,12 @@ namespace SLTtechSoft
                     string CurrentRank = formMain.txtRank.Text;
                     if (formOption.Parameters.MES.MesEnabel)
                     {
-                        if (MesDataInfomation.Rank.Length != 0)
+                        if (MesDataInfomation.Rank != null && MesDataInfomation.Rank.Length > 0 &&
+                            formMain.dgvRank.Rows.Count > 0 &&
+                            RankIndex >= 0 && RankIndex < formMain.dgvRank.Rows.Count)
                         {
-                            if (formMain.dgvRank.Rows.Count > 0)
-                            {
-                                if (RankIndex < formMain.dgvRank.Rows.Count - 1)
-                                {
-                                    CurrentRank = formMain.dgvRank.Rows[RankIndex].Cells[0].Value.ToString();
-                                }
-                            }
+                            object rankValue = formMain.dgvRank.Rows[RankIndex].Cells[0].Value;
+                            if (rankValue != null) CurrentRank = rankValue.ToString();
                         }
                     }
                     if (CurrentSerialNo == "" || CurrentYMMDDN == "")
@@ -3217,6 +3214,12 @@ namespace SLTtechSoft
                     break;
 
                 case 10:
+                    // If PLC requested Fiducial correction for this cycle, do not start
+                    // marking until the Fiducial handshake reports ALLDone.
+                    if (PLC.Read.AutoBits[PlcDic.Require_CheckFiducial] &&
+                        !PLC.Write.AutoBits[PlcDic.CheckFiducialALLDone])
+                        return;
+
                     if (IndexPatternAuto >= _autoMarkingCount)
                     {
                         AutoMarkingProcessIndex = 30;

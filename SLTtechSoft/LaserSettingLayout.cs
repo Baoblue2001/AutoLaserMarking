@@ -81,9 +81,15 @@ namespace SLTtechSoft
                     e.Graphics.DrawLine(pen, centerX - arm, centerY, centerX + arm, centerY);
                     e.Graphics.DrawLine(pen, centerX, centerY - arm, centerX, centerY + arm);
                     float textLeft = centerX + 10f * scale;
-                    RectangleF textBounds = new RectangleF(
-                        textLeft, 0, Math.Max(0, ClientSize.Width - textLeft), ClientSize.Height);
-                    e.Graphics.DrawString(Text, Font, brush, textBounds, format);
+                    float textWidth = ClientSize.Width - textLeft;
+                    // DrawString throws ArgumentException when the layout rectangle
+                    // has zero/negative dimensions (possible during the first layout).
+                    if (!string.IsNullOrEmpty(Text) && textWidth > 1f && ClientSize.Height > 1)
+                    {
+                        RectangleF textBounds = new RectangleF(
+                            textLeft, 0, textWidth, ClientSize.Height);
+                        e.Graphics.DrawString(Text, Font, brush, textBounds, format);
+                    }
                 }
             }
         }
@@ -3109,23 +3115,14 @@ namespace SLTtechSoft
             FiducialLabel view = item.View as FiducialLabel;
             if (view == null) return;
 
-            // Show the actual machine/servo coordinates beside the plus marker.
-            // The plus intersection itself remains exactly on item.Position.
-            PointF machinePosition = GetFiducialCoordinates(item);
-            view.Text = "F" + item.Id
-                + "  X:" + FormatCoordinate(machinePosition.X)
-                + "  Y:" + FormatCoordinate(machinePosition.Y);
+            // Keep the fiducial annotation compact: show only its ID, not servo coordinates.
+            // The coordinate values remain available in the fiducial table.
+            view.Text = "F" + item.Id;
 
             float zoom = Math.Max(0.05f, imageZoom);
             view.DisplayZoom = zoom;
 
             const float baseFontSize = 9f;
-            Font previousFont = view.Font;
-            view.Font = new Font(Font.FontFamily, Math.Max(1f, baseFontSize * zoom), FontStyle.Bold);
-            if (previousFont != null && !ReferenceEquals(previousFont, Control.DefaultFont))
-                previousFont.Dispose();
-
-            // Measure at the base font, then scale the complete label only once.
             int baseTextWidth;
             int baseTextHeight;
             using (Font measureFont = new Font(Font.FontFamily, baseFontSize, FontStyle.Bold))
@@ -3138,12 +3135,17 @@ namespace SLTtechSoft
                     TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Height;
             }
 
-            int width = (int)Math.Ceiling((18f + baseTextWidth + 4f) * zoom);
+            Font previousFont = view.Font;
+            view.Font = new Font(Font.FontFamily, Math.Max(1f, baseFontSize * zoom), FontStyle.Bold);
+            if (previousFont != null && !ReferenceEquals(previousFont, Control.DefaultFont))
+                previousFont.Dispose();
+
+            // Scale the marker and its short ID label once, using base-font metrics.
+            int width = (int)Math.Ceiling((18f + baseTextWidth + 8f) * zoom);
             int height = (int)Math.Ceiling(Math.Max(24f, baseTextHeight + 6f) * zoom);
             view.Size = new Size(Math.Max(1, width), Math.Max(1, height));
 
-            // Fiducial position is the center of the red '+' rather than the center
-            // of the full text label, so adding coordinate text cannot shift the point.
+            // The intersection of '+' remains exactly at the fiducial image position.
             view.Left = (int)Math.Round(item.Position.X * zoom - view.MarkerCenterX);
             view.Top = (int)Math.Round(item.Position.Y * zoom - view.Height / 2f);
             view.BringToFront();

@@ -2981,10 +2981,16 @@ namespace SLTtechSoft
 
             try
             {
+                int localId = -1;
+                int localCount = 0;
+                PointF localMachine = PointF.Empty;
                 Func<bool> read = () => formModel.laserSettingLayout.TryGetAutoFiducialMachinePosition(
-                    index, out fiducialId, out teachMachine, out fiducialCount);
+                    index, out localId, out localMachine, out localCount);
 
                 bool valid = InvokeRequired ? (bool)Invoke(read) : read();
+                fiducialId = localId;
+                fiducialCount = localCount;
+                teachMachine = localMachine;
                 if (!valid)
                 {
                     error = fiducialCount == 0
@@ -3024,14 +3030,19 @@ namespace SLTtechSoft
                 return;
             }
 
-            PointF actualMachine;
+            PointF actualMachine = PointF.Empty;
+            PointF convertedMachine = PointF.Empty;
             Func<bool> convert = () => formModel.laserSettingLayout.TryConvertAutoFramePixelToMachine(
                 _autoFiducialServoX, _autoFiducialServoY,
                 process.LastInputWidth, process.LastInputHeight,
-                pixel.X, pixel.Y, out actualMachine);
+                pixel.X, pixel.Y, out convertedMachine);
 
             bool converted;
-            try { converted = InvokeRequired ? (bool)Invoke(convert) : convert(); }
+            try
+            {
+                converted = InvokeRequired ? (bool)Invoke(convert) : convert();
+                actualMachine = convertedMachine;
+            }
             catch (Exception ex)
             {
                 AutoFailFiducial("Pixel-to-machine conversion failed: " + ex.Message);

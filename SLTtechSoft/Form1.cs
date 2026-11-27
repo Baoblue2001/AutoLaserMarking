@@ -2629,9 +2629,12 @@ namespace SLTtechSoft
                 error = "VisionMaster Y output was not found or is not numeric: " + AutoFiducialYOutputName;
                 return false;
             }
-            if (x < 0 || y < 0 || x > float.MaxValue || y > float.MaxValue)
+            VisionMasterProcess process = _VisionSystem[cameraIndex].VisionProcesses[processIndex];
+            if (x < 0 || y < 0 || x > float.MaxValue || y > float.MaxValue ||
+                process.LastInputWidth <= 0 || process.LastInputHeight <= 0 ||
+                x >= process.LastInputWidth || y >= process.LastInputHeight)
             {
-                error = "VisionMaster Fiducial pixel coordinate is outside the supported range.";
+                error = "VisionMaster Fiducial pixel coordinate is outside the last input image.";
                 return false;
             }
 

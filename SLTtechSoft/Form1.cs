@@ -2574,8 +2574,8 @@ namespace SLTtechSoft
 
         // Configure these names to match the numeric outputs in the Fiducial VisionMaster PRC.
         // Leave empty until the PRC output names are confirmed; Auto must fail closed if not configured.
-        public string AutoFiducialXOutputName = "";
-        public string AutoFiducialYOutputName = "";
+        public string AutoFiducialXOutputName = "Fiducial_X";
+        public string AutoFiducialYOutputName = "Fiducial_Y";
 
         public sealed class AutoFiducialPointData
         {
@@ -2771,6 +2771,52 @@ namespace SLTtechSoft
         public PointF AutoApplyFiducialOffsetXY(PointF teachPosition, PointF offset)
         {
             return new PointF(teachPosition.X + offset.X, teachPosition.Y + offset.Y);
+        }
+
+        /// <summary>Writes a Fiducial machine coordinate to the Fiducial PLC register pair only.</summary>
+        public bool AutoWriteFiducialCoordinates(PointF machinePosition)
+        {
+            int x, y;
+            if (!AutoTryConvertPlcCoordinate(machinePosition, out x, out y)) return false;
+            PLC.Write.WordIntegers[PlcDic.CheckFiducial_PosX] = x;
+            PLC.Write.WordIntegers[PlcDic.CheckFiducial_PosY] = y;
+            return true;
+        }
+
+        /// <summary>Writes a CODE inspection coordinate to the CODE PLC register pair only.</summary>
+        public bool AutoWriteCodeCoordinates(PointF machinePosition)
+        {
+            int x, y;
+            if (!AutoTryConvertPlcCoordinate(machinePosition, out x, out y)) return false;
+            PLC.Write.WordIntegers[PlcDic.CheckCode_PosX] = x;
+            PLC.Write.WordIntegers[PlcDic.CheckCode_PosY] = y;
+            return true;
+        }
+
+        /// <summary>Writes a Marking List coordinate to the Marking PLC register pair only.</summary>
+        public bool AutoWriteMarkingCoordinates(PointF machinePosition)
+        {
+            int x, y;
+            if (!AutoTryConvertPlcCoordinate(machinePosition, out x, out y)) return false;
+            PLC.Write.WordIntegers[PlcDic.MarkingPosX] = x;
+            PLC.Write.WordIntegers[PlcDic.MarkingPosY] = y;
+            return true;
+        }
+
+        private static bool AutoTryConvertPlcCoordinate(PointF position, out int x, out int y)
+        {
+            x = 0;
+            y = 0;
+            if (float.IsNaN(position.X) || float.IsInfinity(position.X) ||
+                float.IsNaN(position.Y) || float.IsInfinity(position.Y))
+                return false;
+            try
+            {
+                x = checked((int)Math.Round(position.X, MidpointRounding.AwayFromZero));
+                y = checked((int)Math.Round(position.Y, MidpointRounding.AwayFromZero));
+                return true;
+            }
+            catch (OverflowException) { return false; }
         }
 
         // Auto Fiducial handshake:
@@ -3055,22 +3101,12 @@ namespace SLTtechSoft
                 return;
             }
 
-            int plcX;
-            int plcY;
-            try
-            {
-                plcX = checked((int)Math.Round(actualMachine.X, MidpointRounding.AwayFromZero));
-                plcY = checked((int)Math.Round(actualMachine.Y, MidpointRounding.AwayFromZero));
-            }
-            catch (OverflowException)
+            // This result belongs to Fiducial, so write only to the Fiducial PLC coordinate pair.
+            if (!AutoWriteFiducialCoordinates(actualMachine))
             {
                 AutoFailFiducial("Measured Fiducial machine coordinate exceeds the PLC integer range.");
                 return;
             }
-
-            // This result belongs to Fiducial, so write only to the Fiducial PLC coordinate pair.
-            PLC.Write.WordIntegers[PlcDic.CheckFiducial_PosX] = plcX;
-            PLC.Write.WordIntegers[PlcDic.CheckFiducial_PosY] = plcY;
 
             _autoFiducialResults.Add(new AutoFiducialPointData
             {

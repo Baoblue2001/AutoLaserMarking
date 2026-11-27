@@ -1,3639 +1,3391 @@
-﻿using CamVisionClass;
-using DocumentFormat.OpenXml.Drawing.Charts;
-
-// PLC Connection
-using FluentModbusPLC;
-using Newtonsoft.Json;
-using PlcCommunication;
-using Protocol;
-using SLTtechSoft.Class;
 using System;
 using System.Collections.Generic;
-using System.Data;
-using System.Diagnostics;
+using System.ComponentModel;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
-using System.IO.Ports;
+using System.Globalization;
 using System.Linq;
-using System.Net;
-using System.Net.Sockets;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Windows;
+using System.Reflection;
 using System.Windows.Forms;
-using WindowsFormsApp1;
-using static SLTtechSoft.ModelTable;
+using Newtonsoft.Json;
+using QRCoder;
 
 namespace SLTtechSoft
 {
-    public partial class Form1 : Form
+    public partial class LaserSettingLayout : Form
     {
-        
-        public Form1()
+        public event EventHandler SaveAllRequested;
+        public event Action<Action<Bitmap, int, int>> ScanImageRequested;
+
+        public enum LaserSurface
         {
-            CheckLastProcessRunning(false);
-            CheckFirstRun();
+            Top,
+            Bot
+        }
+
+        private sealed class QrMarkingLabel : Label
+        {
+            public Bitmap QrImage { get; set; }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                e.Graphics.Clear(BackColor);
+                if (QrImage != null)
+                    e.Graphics.DrawImage(QrImage, ClientRectangle);
+                else
+                    TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, ForeColor, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+
+                if (BackColor == Color.LimeGreen)
+                {
+                    using (Pen selectionPen = new Pen(Color.LimeGreen, 3f))
+                        e.Graphics.DrawRectangle(selectionPen, 1, 1, ClientSize.Width - 3, ClientSize.Height - 3);
+                }
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing && QrImage != null)
+                {
+                    QrImage.Dispose();
+                    QrImage = null;
+                }
+                base.Dispose(disposing);
+            }
+        }
+
+        private sealed class FiducialLabel : Label
+        {
+            public float DisplayZoom { get; set; } = 1f;
+            public float MarkerCenterX { get { return 8f * Math.Max(0.05f, DisplayZoom); } }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                // Let the standard WinForms Label renderer draw the ID text.
+                // It avoids GDI+ DrawString failures while the fiducial is being dragged.
+                base.OnPaint(e);
+
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                float scale = Math.Max(0.05f, DisplayZoom);
+                float centerX = MarkerCenterX;
+                float centerY = ClientSize.Height / 2f;
+                float arm = 7f * scale;
+
+                using (Pen pen = new Pen(Color.Red, Math.Max(1f, 1.6f * scale)))
+                {
+                    // The intersection of the plus sign is the exact fiducial coordinate.
+                    e.Graphics.DrawLine(pen, centerX - arm, centerY, centerX + arm, centerY);
+                    e.Graphics.DrawLine(pen, centerX, centerY - arm, centerX, centerY + arm);
+                }
+            }
+        }
+
+        private static float ParseResolution(string text, float fallback)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return fallback;
+
+            // Do not allow thousands separators here. On Vietnamese Windows, for example,
+            // "." is commonly the thousands separator and "0.02" could otherwise be parsed
+            // as 2 instead of 0.02. Accept either the current culture decimal separator
+            // or invariant "." while keeping the entered numeric value unambiguous.
+            float value;
+            bool parsed = float.TryParse(text.Trim(), NumberStyles.Float,
+                CultureInfo.CurrentCulture, out value);
+
+            if (!parsed)
+                parsed = float.TryParse(text.Trim(), NumberStyles.Float,
+                    CultureInfo.InvariantCulture, out value);
+
+            return parsed && value > 0 && !float.IsNaN(value) && !float.IsInfinity(value)
+                ? value
+                : fallback;
+        }
+
+        private static string NormalizeMarkingType(string type)
+        {
+            if (string.IsNullOrWhiteSpace(type)) return "CODE";
+            string value = type.Replace(" ", "").Trim();
+            if (string.Equals(value, "CODE", StringComparison.OrdinalIgnoreCase)) return "CODE";
+            if (string.Equals(value, "RIGHTTEXT", StringComparison.OrdinalIgnoreCase)) return "RIGHTTEXT";
+            if (string.Equals(value, "LEFTTEXT", StringComparison.OrdinalIgnoreCase)) return "LEFTTEXT";
+            if (string.Equals(value, "TOPTEXT", StringComparison.OrdinalIgnoreCase)) return "TOPTEXT";
+            if (string.Equals(value, "BOTTOMTEXT", StringComparison.OrdinalIgnoreCase)) return "BOTTOMTEXT";
+            return type.Trim();
+        }
+
+        private static float GetMarkingRotation(string type)
+        {
+            switch (NormalizeMarkingType(type))
+            {
+                case "TOPTEXT": return 90f;
+                case "BOTTOMTEXT": return 270f;
+                default: return 0f;
+            }
+        }
+
+        private sealed class FiducialItem
+        {
+            public int Id;
+            public string ImageId;
+            public PointF LocalPosition;
+            public PointF Position; // Contact-sheet canvas position used only for drawing.
+            public Label View;
+        }
+
+        private sealed class ImageTileInfo
+        {
+            public string ImageId;
+            public RectangleF DisplayBounds;
+            public int SourceWidth;
+            public int SourceHeight;
+            // Affine mapping from source-image pixels to stitched-canvas pixels.
+            public PointF CanvasOrigin;
+            public PointF CanvasXAxis;
+            public PointF CanvasYAxis;
+            public float Scale;
+        }
+
+        private sealed class DirectionalMarkingLabel : Label
+        {
+            public float Rotation { get; set; }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                if (Rotation == 0)
+                {
+                    base.OnPaint(e);
+                    return;
+                }
+
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                e.Graphics.Clear(BackColor);
+                e.Graphics.TranslateTransform(ClientSize.Width / 2f, ClientSize.Height / 2f);
+                e.Graphics.RotateTransform(Rotation);
+                e.Graphics.TranslateTransform(-ClientSize.Height / 2f, -ClientSize.Width / 2f);
+                using (Brush brush = new SolidBrush(BackColor))
+                using (Pen pen = new Pen(ForeColor))
+                using (Brush textBrush = new SolidBrush(ForeColor))
+                using (StringFormat format = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center })
+                {
+                    RectangleF textBounds = new RectangleF(0, 0, ClientSize.Height, ClientSize.Width);
+                    e.Graphics.FillRectangle(brush, textBounds);
+                    e.Graphics.DrawRectangle(pen, 0, 0, ClientSize.Height - 1, ClientSize.Width - 1);
+                    e.Graphics.DrawString(Text, Font, textBrush, textBounds, format);
+                }
+                e.Graphics.ResetTransform();
+            }
+        }
+
+        public sealed class MarkingItem
+        {
+            public int Id;
+            public string ImageId;
+            public PointF LocalPosition;
+            public string Product;
+            public string Type;
+            public string PrintType;
+            public string Content;
+            public PointF Position; // Contact-sheet canvas position used only for drawing.
+            public Label View;
+            public string Rotate;
+        }
+
+        public  List<MarkingItem> markings = new List<MarkingItem>();
+        private readonly List<MarkingItem> selectedMarkings = new List<MarkingItem>();
+        private readonly List<FiducialItem> fiducials = new List<FiducialItem>();
+        private readonly List<ImageTileInfo> imageTiles = new List<ImageTileInfo>();
+        public MarkingItem selectedMarking;
+        private FiducialItem selectedFiducial;
+        private int nextMarkingId;
+        private int nextFiducialId;
+        private float imageZoom = 1f;
+        private float targetZoom = 1f;
+        private Point zoomAnchor;
+        private double zoomAnchorImageX;
+        private double zoomAnchorImageY;
+        private Timer zoomAnimationTimer;
+        private Point imagePan;
+        private Point panStart;
+        private bool panning;
+        private bool panMode;
+        private bool selectingMarkings;
+        private bool addingFiducial;
+        private bool updatingMarkingSelection;
+        private Point selectionStart;
+        private Point selectionEnd;
+        private bool updatingPositionControls;
+        private LaserSurface currentSurface = LaserSurface.Top;
+        private LaserSurfaceParameter topParameters = new LaserSurfaceParameter();
+        private LaserSurfaceParameter botParameters = new LaserSurfaceParameter();
+        private LaserSurfaceParameter savedTopParameters;
+        private LaserSurfaceParameter savedBotParameters;
+        private string topImageFileName = "";
+        private string botImageFileName = "";
+        private string modelFolderPath = "";
+        private bool refreshingPictureGrid;
+        private bool updatingPictureCoordinates;
+        private bool picturePreviewActive;
+        private bool refreshingAxisControls;
+        private bool loadingSurfaceControls;
+        private CheckBox enableAxisTransform;
+        private CheckBox swapServoAxes;
+        private CheckBox reverseServoX;
+        private CheckBox reverseServoY;
+        private readonly List<MarkingItem> copiedMarkings = new List<MarkingItem>();
+        private const float MarkingFontSize = 9.75f;
+
+        public LaserSettingLayout()
+        {
             InitializeComponent();
-            CamPartNo = new int[NumberOfCamera];
-            CamJigNo = new int[NumberOfCamera];
-            IsCamRunContinous = new bool[NumberOfCamera];
-            IsLiveCam = new bool[NumberOfCamera];
-            DataWritePLC = new ushort[NumberWritePLC];
-            DataWriteWPLC = new ushort[NumberWriteWPLC];
-        }
-     
-        #region Check Last running proces
-        private void CheckFirstRun()
-        {
 
-            DialogResult result = System.Windows.Forms.MessageBox.Show("Yes : Normal Machine Mode \nNo: Test Mode (No connect to PLC and Camera) \nCancel: Exit", "Mode Software", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            // Keep the zoom controls as an overlay at runtime; leave their
+            // designer parentage intact while the form is being edited.
+            if (LicenseManager.UsageMode != LicenseUsageMode.Designtime)
+                ConfigureZoomToolbarOverlay();
 
-            if (result == DialogResult.Yes)
+            KeyPreview = true;
+            zoomAnimationTimer = new Timer { Interval = 15 };
+            zoomAnimationTimer.Tick += ZoomAnimationTick;
+            FormClosed += (s, e) =>
             {
-                IsTestNoPLC = false;
-                IsTestNoCam = new bool[] { false, false, false, false };
-
-            }
-            if (result == DialogResult.No)
-            {
-                IsTestNoPLC = true;
-                IsTestNoCam = new bool[] { true, true, true, true };
-
-            }
-            if (result == DialogResult.Cancel)
-            {
-                this.Close();
-                Environment.Exit(0);
-            }
-        }
-        private void CheckLastProcessRunning(bool bShowMessage)
-        {
-            if (System.Diagnostics.Process.GetProcessesByName(System.Diagnostics.Process.GetCurrentProcess().ProcessName).Length > 1)
-            {
-                if (bShowMessage)
-                {
-                    System.Windows.Forms.MessageBox.Show("Another process is running, Please End last process", "Warning", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                }
-
-                this.Close();
-                Environment.Exit(0);
-            }
-        }
-        #endregion
-        private void Form1_Load(object sender, EventArgs e)
-        {
-            InitializeVision();
-            InitialDevice();
-            InitialUI();
-
-            InitializeLanguageSelector();
-            AppLanguage savedLanguage = LanguageManager.Parse(Properties.Settings.Default.UiLanguage);
-            ChangeLanguage(savedLanguage, false);
-        }
-        /// <summary>
-        /// The context menu used to select the application language.Language selector
-        /// </summary>
-        private ContextMenuStrip _languageMenu;
-        private PictureBox _languageFlag;
-        private Label _languageCaption;
-        private AppLanguage _currentLanguage = AppLanguage.Vietnamese;
-
-        private void InitializeLanguageSelector()
-        {
-            if (pnLangue == null) return;
-
-            pnLangue.Controls.Clear();
-            pnLangue.BackgroundImage = null;
-            pnLangue.BackColor = Color.FromArgb(214, 234, 248);
-            pnLangue.Size = new System.Drawing.Size(170, 40);
-            pnLangue.Cursor = Cursors.Hand;
-
-            _languageFlag = new PictureBox
-            {
-                Name = "picCurrentLanguage",
-                Location = new System.Drawing.Point(8, 6),
-                Size = new System.Drawing.Size(42, 28),
-                SizeMode = PictureBoxSizeMode.Zoom,
-                BackColor = Color.Transparent,
-                Cursor = Cursors.Hand
+                zoomAnimationTimer.Stop();
+                zoomAnimationTimer.Dispose();
             };
-
-            _languageCaption = new Label
-            {
-                Name = "lblCurrentLanguage",
-                Location = new System.Drawing.Point(58, 0),
-                Size = new System.Drawing.Size(106, 40),
-                TextAlign = ContentAlignment.MiddleLeft,
-                Font = new System.Drawing.Font("Segoe UI", 9.5f, System.Drawing.FontStyle.Bold),
-                ForeColor = Color.FromArgb(35, 45, 55),
-                BackColor = Color.Transparent,
-                Cursor = Cursors.Hand
-            };
-
-            pnLangue.Controls.Add(_languageFlag);
-            pnLangue.Controls.Add(_languageCaption);
-
-            _languageMenu = new ContextMenuStrip
-            {
-                ImageScalingSize = new System.Drawing.Size(42, 28),
-                Font = new System.Drawing.Font("Segoe UI", 10f)
-            };
-
-            AddLanguageMenuItem("Tiếng Việt", Properties.Resources.vietnam, AppLanguage.Vietnamese);
-            AddLanguageMenuItem("English", Properties.Resources.English, AppLanguage.English);
-            AddLanguageMenuItem("한국어", Properties.Resources.images, AppLanguage.Korean);
-
-            pnLangue.Click += LanguageSelector_Click;
-            _languageFlag.Click += LanguageSelector_Click;
-            _languageCaption.Click += LanguageSelector_Click;
+            ConfigurePictureGrid();
+            ConfigureAxisTransformControls();
+            ConfigureImageViewport();
+            InitializeMarkingList();
+            WireEvents();
+            ConfigurePanMenu();
+            positionX.Maximum = 1000000;
+            positionY.Maximum = 1000000;
+            //resolutionValue.TextChanged += ResolutionValueTextChanged;
         }
 
-        private void AddLanguageMenuItem(string caption, Image flag, AppLanguage language)
+        private void ConfigurePanMenu()
         {
-            ToolStripMenuItem item = new ToolStripMenuItem(caption)
-            {
-                Image = flag,
-                Tag = language,
-                ImageScaling = ToolStripItemImageScaling.SizeToFit
-            };
-            item.Click += (sender, e) => ChangeLanguage((AppLanguage)((ToolStripMenuItem)sender).Tag, true);
-            _languageMenu.Items.Add(item);
+            ContextMenuStrip menu = new ContextMenuStrip();
+            ToolStripMenuItem normalItem = new ToolStripMenuItem("Normal");
+            ToolStripMenuItem panItem = new ToolStripMenuItem("Pan");
+            normalItem.Click += (s, e) => SetPanMode(false);
+            panItem.Click += (s, e) => SetPanMode(true);
+            menu.Items.Add(normalItem);
+            menu.Items.Add(panItem);
+            markingImage.ContextMenuStrip = menu;
+            imageViewport.ContextMenuStrip = menu;
+            SetPanMode(false);
         }
 
-        private void LanguageSelector_Click(object sender, EventArgs e)
+        private void SetPanMode(bool enabled)
         {
-            if (_languageMenu != null && pnLangue != null)
-                _languageMenu.Show(pnLangue, new System.Drawing.Point(0, pnLangue.Height));
+            panMode = enabled;
+            Cursor = enabled ? Cursors.Hand : Cursors.Default;
+            markingImage.Cursor = enabled ? Cursors.Hand : Cursors.Default;
+            imageViewport.Cursor = enabled ? Cursors.Hand : Cursors.Default;
         }
 
-        private void ChangeLanguage(AppLanguage language, bool save)
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            _currentLanguage = language;
-            LanguageManager.Apply(this, language);
-
-            if (_languageFlag != null)
+            if (keyData == (Keys.Control | Keys.C))
             {
-                switch (language)
-                {
-                    case AppLanguage.English:
-                        _languageFlag.Image = Properties.Resources.English;
-                        break;
-                    case AppLanguage.Korean:
-                        _languageFlag.Image = Properties.Resources.images;
-                        break;
-                    default:
-                        _languageFlag.Image = Properties.Resources.vietnam;
-                        break;
-                }
+                CopySelectedMarking();
+                return true;
             }
 
-            if (_languageCaption != null)
-                _languageCaption.Text = LanguageManager.GetLanguageName(language) + "  ▼";
-
-            if (save)
+            if (keyData == (Keys.Control | Keys.V))
             {
-                try
-                {
-                    Properties.Settings.Default.UiLanguage = language.ToString();
-                    Properties.Settings.Default.Save();
-                }
-                catch (Exception ex)
-                {
-                    WriteLogPC(LogType.Main, "Language", "Could not save language preference: " + ex.Message);
-                }
-            }
-        }
-        private void InitialDevice()
-        {
-            trd = new Thread(new ThreadStart(this.ThreadTask));
-            trd.IsBackground = true;
-
-            threadCam1 = new Thread(new ThreadStart(ThreadCam_Task1));
-            threadCam1.IsBackground = true;
-
-            Matrix220 = new SerialPort();
-            InitialVariablePLC();
-            
-            InitialMes();
-            // ErrorListContent1 = ReadErrorListContent(0);
-            // ErrorListContent2 = ReadErrorListContent(1);
-        }
-        private void RefreshSizeForm()
-        {
-
-            if (formMain != null && IndexFormShowing == 0)
-            {
-                formMain.WindowState = FormWindowState.Normal;
-                formMain.WindowState = FormWindowState.Maximized;
-            }
-            if (formModel != null && IndexFormShowing == 1)
-            {
-                formModel.WindowState = FormWindowState.Normal;
-                formModel.WindowState = FormWindowState.Maximized;
-            }
-            if (formIO != null && IndexFormShowing == 2)
-            {
-                formIO.WindowState = FormWindowState.Normal;
-                formIO.WindowState = FormWindowState.Maximized;
-            }
-            if (formOption != null && IndexFormShowing == 3)
-            {
-                formOption.WindowState = FormWindowState.Normal;
-                formOption.WindowState = FormWindowState.Maximized;
+                PasteCopiedMarking();
+                return true;
             }
 
+            return base.ProcessCmdKey(ref msg, keyData);
         }
-      
-        /// <summary>
-        /// Menu Click
-        /// </summary>
-        private void Form1_SizeChanged(object sender, EventArgs e)
-        {
-            RefreshSizeForm();
-        }
-        private void btnMain_Click(object sender, EventArgs e)
-        {
-            Program.IsLoggedIn = false;
-            if (IndexFormShowing != 0)
-            {
-                IndexFormShowing = 0;
-                formMain.Show();
-                formModel.Hide();
-                formIO.Hide();
-                formOption.Hide();
-                btnMain.BackColor = TabControlBackColorON;
-                btnModel.BackColor = TabControlBackColorOFF;
-                btnIO.BackColor = TabControlBackColorOFF;
-                btnOption.BackColor = TabControlBackColorOFF;
 
-              
-                formIO.timer1.Enabled = false;
-            }
-            formModel.IsliveCamModel = false;
-            IsLiveCam = new bool[4];
-            RefreshSizeForm();
-        }
-        private void btnModel_Click(object sender, EventArgs e)
+        public void ReleaseResources()
         {
+            foreach (FiducialItem item in fiducials)
+                if (item.View != null) markingImage.Controls.Remove(item.View);
+            foreach (MarkingItem item in markings)
+                if (item.View != null) imageViewport.Controls.Remove(item.View);
+            markings.Clear();
+            selectedMarkings.Clear();
+            fiducials.Clear();
 
-            //if (!Program.IsLoggedIn) FormLogin.ShowDialog();
-            //if(Program.IsLoggedIn)
-            //{
-            IsLiveCam = new bool[4];
-            if (IndexFormShowing != 1)
-                {
-                    IndexFormShowing = 1;
-                    formMain.Hide();
-                    formModel.Show();
-                    formIO.Hide();
-                    formOption.Hide();
-                    btnMain.BackColor = TabControlBackColorOFF;
-                    btnModel.BackColor = TabControlBackColorON;
-                    btnIO.BackColor = TabControlBackColorOFF;
-                    btnOption.BackColor = TabControlBackColorOFF;
-               
-                    formIO.timer1.Enabled = false;
-                }
+            Image oldImage = markingImage.Image;
+            markingImage.Image = null;
+            if (oldImage != null) oldImage.Dispose();
+        }
 
-                RefreshSizeForm();
-          // }
-            
-        }
-        private void btnIO_Click(object sender, EventArgs e)
+        private void ConfigureZoomToolbarOverlay()
         {
-            Program.IsLoggedIn = false;
-            IsLiveCam = new bool[4];
-            if (IndexFormShowing != 2)
-            {
-                IndexFormShowing = 2;
-                formMain.Hide();
-                formModel.Hide();
-                formIO.Show();
-                formOption.Hide();
-                btnMain.BackColor = TabControlBackColorOFF;
-                btnModel.BackColor = TabControlBackColorOFF;
-                btnIO.BackColor = TabControlBackColorON;
-                btnOption.BackColor = TabControlBackColorOFF;
-            
-                formIO.timer1.Enabled = true;
-            }
-            formModel.IsliveCamModel = false;
-            RefreshSizeForm();
+            // Keep zoom controls outside the scrollable/pannable canvas at runtime.
+            imageTools.Parent = imagePanel;
+            imageTools.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            imageTools.Location = new Point(
+                Math.Max(0, imagePanel.ClientSize.Width - imageTools.Width - 5), 5);
+            imageTools.BringToFront();
         }
-        private void btnOption_Click(object sender, EventArgs e)
-        {
-            Program.IsLoggedIn = false;
-            IsLiveCam = new bool[4];
-            if (IndexFormShowing != 3)
-            {
-                IndexFormShowing = 3;
-                formMain.Hide();
-                formModel.Hide();
-                formIO.Hide();
-                formOption.Show();
-                btnMain.BackColor = TabControlBackColorOFF;
-                btnModel.BackColor = TabControlBackColorOFF;
-                btnIO.BackColor = TabControlBackColorOFF;
-                btnOption.BackColor = TabControlBackColorON;
-                formModel.IsliveCamModel = false;
-                formIO.timer1.Enabled = false;
-            }
-            RefreshSizeForm();
-        }
-        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
-        {
-            if (_closingConfirmed) return;
 
-            DialogResult result = System.Windows.Forms.MessageBox.Show("Do you want close this application", "Close", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-            if (result != DialogResult.Yes)
-            {
-                e.Cancel = true;
+        private void ConfigureImageViewport()
+        {
+            // Zoom and pan are handled by imagePan/imageZoom only. Native AutoScroll must stay disabled.
+            imageViewport.AutoScroll = false;
+            imageViewport.Dock = DockStyle.Fill;
+            imageViewport.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            markingImage.Dock = DockStyle.None;
+            markingImage.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+            markingImage.AutoSize = false;
+            markingImage.Location = Point.Empty;
+            EnableDoubleBuffering(imageViewport);
+            EnableDoubleBuffering(markingImage);
+            imageViewport.Controls.SetChildIndex(markingImage, 0);
+        }
+
+        private static void EnableDoubleBuffering(Control control)
+        {
+            if (control == null) return;
+            PropertyInfo property = typeof(Control).GetProperty(
+                "DoubleBuffered", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (property != null)
+                property.SetValue(control, true, null);
+        }
+
+        public void LoadImage(string fileName)
+        {
+            LoadImage(fileName, true);
+        }
+
+        private void LoadImage(string fileName, bool fitToViewport)
+        {
+            LoadImage(fileName, fitToViewport, true);
+        }
+
+        private void LoadImage(string fileName, bool fitToViewport, bool updateSurfaceFileName)
+        {
+            if (string.IsNullOrWhiteSpace(fileName) || !System.IO.File.Exists(fileName))
                 return;
-            }
-
-            _closingConfirmed = true;
-            _shutdownRequested = true;
-            MachineMode = ModeMachine.Manual;
-            try { timer1.Enabled = false; } catch { }
-            try { formIO.timer1.Enabled = false; } catch { }
-            IsLiveCam = new bool[NumberOfCamera];
-            IsCamRunContinous = new bool[NumberOfCamera];
-            try { DisconnectPLC(0); } catch { }
-            try { formModel?.CloseProcedureEditorForShutdown(); } catch { }
-            try { formMain?.ReleaseVisionMasterBindings(); } catch { }
-            try { DestroyCamera(); } catch { }
-            CloseEmbeddedForm(formIO);
-            CloseEmbeddedForm(formOption);
-            CloseEmbeddedForm(formModel);
-            CloseEmbeddedForm(formMain);
-            DisposeAllDevice();
-        }
-
-        private static void CloseEmbeddedForm(Form form)
-        {
-            if (form == null || form.IsDisposed) return;
-            try { form.Hide(); } catch { }
-            try { form.Dispose(); } catch { }
-        }
-        private void StopWorkerThreads()
-        {
-            _shutdownRequested = true;
-            try { if (threadCam1 != null && threadCam1.IsAlive && Thread.CurrentThread != threadCam1) threadCam1.Join(2000); } catch { }
-            try { if (trd != null && trd.IsAlive && Thread.CurrentThread != trd) trd.Join(1000); } catch { }
-        }
-        public void RunWithVisionRuntimeLock(Action action)
-        {
-            if (action == null) return;
-            lock (_visionRuntimeSync) action();
-        }
-        public T RunWithVisionRuntimeLock<T>(Func<T> action)
-        {
-            if (action == null) return default(T);
-            lock (_visionRuntimeSync) return action();
-        }
-        private void DisposeAllDevice()
-        {
-            try { PLCDispose(0); } catch { }
-            try { timer1.Enabled = false; } catch { }
-            threadCam1 = null;
-            trd = null;
-        }
-        private void InitialUI()
-        {
-
-            ListLabelCamConnected.Add(lbCam1Connected);
-            ListLabelCamConnected.Add(lbCam2Connected);
-            ListLabelCamConnected.Add(lbCam3Connected);
-            ListLabelCamConnected.Add(lbCam4Connected);
-
-            ListLabelAcqTimeCam.Add(lbAcqTimeCam1);
-            ListLabelAcqTimeCam.Add(lbAcqTimeCam2);
-            ListLabelAcqTimeCam.Add(lbAcqTimeCam3);
-            ListLabelAcqTimeCam.Add(lbAcqTimeCam4);
-
-            ListLabelVisionTimeCam.Add(lbVisionTimeCam1);
-            ListLabelVisionTimeCam.Add(lbVisionTimeCam2);
-            ListLabelVisionTimeCam.Add(lbVisionTimeCam3);
-            ListLabelVisionTimeCam.Add(lbVisionTimeCam4);
-
-            PanelCamStatus.Add(panelCam1);
-            PanelCamStatus.Add(panelCam2);
-            PanelCamStatus.Add(panelCam3);
-            PanelCamStatus.Add(panelCam4);
-            formIO = new FormIO();
-            formIO.TopLevel = false;
-            this.panel8.Controls.Add(formIO);
-
-            formOption = new FormOption();
-            formOption.TopLevel = false;
-            this.panel8.Controls.Add(formOption);
-
-            formModel = new Model();
-            formModel.TopLevel = false;
-            this.panel8.Controls.Add(formModel);
-
-            formMain = new Main();
-            formMain.TopLevel = false;
-            this.panel8.Controls.Add(formMain);
-            FormLogin = new Login();
-            formOption.InitializeUI(this);
-            formModel.InitializeUI(this);
-            formIO.InitializeUI(this);
-            formMain.InitializeUI(this);
-            
-            formIO.timer1.Enabled = false;
-
-            IndexFormShowing = 0;
-            formMain.Show();
-            btnMain.BackColor = TabControlBackColorON;
-            btnModel.BackColor = TabControlBackColorOFF;
-            btnIO.BackColor = TabControlBackColorOFF;
-            btnOption.BackColor = TabControlBackColorOFF;
-            timer1.Enabled = true;
-            if (formOption.Parameters.MES.MesEnabel)
-                MES.ConnectTCP(formOption.Parameters.MES.HostIP, formOption.Parameters.MES.Port);
-        }
-        /// <summary>
-        /// Thread PLC Communication
-        /// </summary>
-        #region PLC Communication
-        private void InitialVariablePLC()
-        {
-            PLC.Read.InputBits.Add("Start");
-            PLC.Read.InputBits.Add("Stop");
-            PLC.Read.InputBits.Add("Reset");
-            PLC.Read.InputBits.Add("EMG");
-
-            PLC.Read.AutoBits.Add(PlcDic.Auto);
-            PLC.Read.AutoBits.Add(PlcDic.Stop);
-            PLC.Read.AutoBits.Add(PlcDic.ComFlash);
-            PLC.Read.AutoBits.Add(PlcDic.ComOn);
-            PLC.Read.AutoBits.Add(PlcDic.TriggerCam[0]);
-            PLC.Read.AutoBits.Add(PlcDic.TriggerCam[1]);
-            PLC.Read.AutoBits.Add(PlcDic.TriggerCam[2]);
-            PLC.Read.AutoBits.Add(PlcDic.TriggerCam[3]);
-            PLC.Read.AutoBits.Add(PlcDic.Trigger_ReadCode);
-            PLC.Read.AutoBits.Add(PlcDic.DonePosCam1);
-            PLC.Read.AutoBits.Add(PlcDic.LightOn[0]);
-            PLC.Read.AutoBits.Add(PlcDic.LightOn[1]);
-            PLC.Read.AutoBits.Add(PlcDic.LightOn[2]);
-            PLC.Read.AutoBits.Add(PlcDic.LightOn[3]);
-            PLC.Read.AutoBits.Add(PlcDic.MarkingCompleteConfirm);
-            PLC.Read.AutoBits.Add(PlcDic.StartMarkingProcess);
-            PLC.Read.AutoBits.Add(PlcDic.MarkingStartConfirm);
-            PLC.Read.AutoBits.Add(PlcDic.MarkingOneDone);
-            PLC.Read.AutoBits.Add(PlcDic.Require_CheckFiducial);
-            PLC.Read.AutoBits.Add(PlcDic.StartCheckFiducial);
-            PLC.Read.AutoBits.Add(PlcDic.Require_CheckCode);
-            PLC.Read.AutoBits.Add(PlcDic.StartCheckCode);
-            PLC.Read.AutoBits.Add(PlcDic.ScanImageTop);
-            PLC.Read.AutoBits.Add(PlcDic.ScanImageBottom);
-
-            PLC.Read.WordUshorts.Add(PlcDic.ModelNo);
-            PLC.Read.WordIntegers.Add(PlcDic.CurentPosX);
-            PLC.Read.WordIntegers.Add(PlcDic.CurentPosY);
-
-            //Write
-            PLC.Write.AutoBits.Add(PlcDic.Auto);
-            PLC.Write.AutoBits.Add(PlcDic.Stop);
-            PLC.Write.AutoBits.Add(PlcDic.ComFlash);
-            PLC.Write.AutoBits.Add(PlcDic.ComOn);
-            PLC.Write.AutoBits.Add(PlcDic.FinishTrigger[0]);
-            PLC.Write.AutoBits.Add(PlcDic.FinishTrigger[1]);
-            PLC.Write.AutoBits.Add(PlcDic.FinishTrigger[2]);
-            PLC.Write.AutoBits.Add(PlcDic.FinishTrigger[3]);
-            PLC.Write.AutoBits.Add(PlcDic.ResultCam[0]);
-            PLC.Write.AutoBits.Add(PlcDic.ResultCam[1]);
-            PLC.Write.AutoBits.Add(PlcDic.ResultCam[2]);
-            PLC.Write.AutoBits.Add(PlcDic.ResultCam[3]);
-            PLC.Write.AutoBits.Add(PlcDic.LightOn[0]);
-            PLC.Write.AutoBits.Add(PlcDic.LightOn[1]);
-            PLC.Write.AutoBits.Add(PlcDic.LightOn[2]);
-            PLC.Write.AutoBits.Add(PlcDic.LightOn[3]);
-            PLC.Write.AutoBits.Add(PlcDic.WriteDataToPlcDone);
-            PLC.Write.AutoBits.Add(PlcDic.MarkingStart);
-            PLC.Write.AutoBits.Add(PlcDic.Restart_Marking);
-            PLC.Write.AutoBits.Add(PlcDic.MarkingComplete);
-            PLC.Write.AutoBits.Add(PlcDic.CheckFiducialOneDone);
-            PLC.Write.AutoBits.Add(PlcDic.CheckFiducialALLDone);
-            PLC.Write.AutoBits.Add(PlcDic.ResultFace_Corrrect);
-            PLC.Write.AutoBits.Add(PlcDic.CheckCodeOneDone);
-            PLC.Write.AutoBits.Add(PlcDic.CheckCodeALLDone);
-            PLC.Write.AutoBits.Add(PlcDic.Result_Code_Exists);
-            PLC.Write.AutoBits.Add(PlcDic.ScanImageTopDone);
-            PLC.Write.AutoBits.Add(PlcDic.ScanImageBottomDone);
-
-            PLC.Write.WordUshorts.Add(PlcDic.ModelNo);
-            PLC.Write.WordIntegers.Add(PlcDic.MarkingPosX);
-            PLC.Write.WordIntegers.Add(PlcDic.MarkingPosY);
-            PLC.Write.WordIntegers.Add(PlcDic.CheckFiducial_PosX);
-            PLC.Write.WordIntegers.Add(PlcDic.CheckFiducial_PosY);
-            PLC.Write.WordIntegers.Add(PlcDic.CheckCode_PosX);
-            PLC.Write.WordIntegers.Add(PlcDic.CheckCode_PosY);
-        }
-        private void ThreadTask()
-        {
-            while (!_shutdownRequested)
-            {
-                // In Test/Disconnected mode the old code was a tight busy-loop and could consume
-                // an entire CPU core, starving WinForms/VisionMaster rendering.
-                if (IsTestNoPLC || formOption == null || formOption.Parameters == null || PLCDevice == null || PLCDevice[0] == null || !PLCDevice[0].IsConnected)
-                {
-                    Thread.Sleep(5);
-                    continue;
-                }
-
-                ReadDataPLC1();
-                AutoCheckFiducial();
-                AutoMarkingProcess();
-                AutoScanImage();
-                WriteDataPLC1();
-            }
-        }
-        private void ReadDataPLC1()
-        {
-           // if (IsLiveCam[0]) return;
-            StopwatchReadPLC = new Stopwatch();
-            StopwatchReadPLC.Start();
-            try
-            {
-                //int[] dataReadPlc123 = Fx5uPLC.ReadRegister(5000,60);
-                ushort[] dataReadPlc123 = PLCDevice[0].ReadWords("7000", 2);
-                ushort[] D7100 = PLCDevice[0].ReadWords("7100", 20);
-                if (true)
-                {
-                    //if (dataReadPlc123[0] == 0) return;
-                    //Auto
-                    bool[] D7000 = WordConvert.UshortToBools(dataReadPlc123[0]);
-                    bool[] D7001 = WordConvert.UshortToBools(dataReadPlc123[1]);
-                    PLC.Read.AutoBits[PlcDic.ComOn] = D7000[0];
-                    PLC.Read.AutoBits[PlcDic.ComFlash]  = D7000[1];
-                    PLC.Read.AutoBits[PlcDic.TriggerCam[0]]  = D7000[2];
-                    PLC.Read.AutoBits[PlcDic.StartMarkingProcess] = D7000[3];
-                    PLC.Read.AutoBits[PlcDic.MarkingCompleteConfirm] = D7000[4];
-                    PLC.Read.AutoBits[PlcDic.MarkingStartConfirm]  = D7000[5];
-                    PLC.Read.AutoBits[PlcDic.MarkingOneDone] = D7000[6];
-                    PLC.Read.AutoBits[PlcDic.ScanImageTop] = D7000[7];
-                    PLC.Read.AutoBits[PlcDic.ScanImageBottom] = D7000[8];
-                    PLC.Read.AutoBits[PlcDic.LightOn[0]]  = D7000[13];
-                    PLC.Read.AutoBits[PlcDic.Require_CheckFiducial] = D7000[14];
-                    PLC.Read.AutoBits[PlcDic.StartCheckFiducial] = D7000[15];
-
-                    PLC.Read.AutoBits[PlcDic.Require_CheckCode] = D7001[2];
-                    PLC.Read.AutoBits[PlcDic.StartCheckCode] = D7001[3];
-                    //Word
-                    PLC.Read.WordUshorts[PlcDic.ModelNo] = D7100[1];
-                    PLC.Read.WordIntegers[PlcDic.CurentPosX] = WordConvert.USigned32Toint(D7100[10], D7100[11]);
-                    PLC.Read.WordIntegers[PlcDic.CurentPosY] = WordConvert.USigned32Toint(D7100[12], D7100[13]);
-                    //for (int i = 0; i < 14; i++)
-                    //{
-                    //    bool[] ThisBools = _WordConvert.WordTo16Bit(dataReadPlc123[14 + i]);
-                    //    PLC.Read.AutoBits[PlcDic.ErrorWord1[i] = dataReadPlc123[14 + i];
-                    //    for (int y = 0; y < 16; y++)
-                    //    {
-                    //        PLC.Read.AutoBits[PlcDic.ErrorList1[i * 16 + y] = ThisBools[y];
-                    //    }
-                    //}
-
-                }
-            }
-            catch (Exception ex)
-            {
-                WriteLogPC(LogType.Main, "PLC", ex.ToString());
-            }
-            StopwatchReadPLC.Stop();
-            TimeSpan ts = StopwatchReadPLC.Elapsed;
-            TimeReadPLC = $"{ts.Seconds}.{PadLeftZeros(ts.Milliseconds, 3)}";
-        }
-        private void WriteDataPLC1()
-        {
-      
-            StopwatchWritePLC = new Stopwatch();
-            StopwatchWritePLC.Start();
-            try
-            {
-                
-                PLC.Write.AutoBits[PlcDic.ComOn] = true;
-               
-                DataWritePLC[0] = WordConvert.Bit16ToWord(
-                    PLC.Write.AutoBits[PlcDic.ComOn],
-                    PLC.Write.AutoBits[PlcDic.ComFlash],
-                    PLC.Write.AutoBits[PlcDic.FinishTrigger[0]],
-                    PLC.Write.AutoBits[PlcDic.ResultCam[0]],
-                    PLC.Write.AutoBits[PlcDic.WriteDataToPlcDone],
-                    PLC.Write.AutoBits[PlcDic.MarkingStart],
-                    PLC.Write.AutoBits[PlcDic.Restart_Marking],
-                    PLC.Write.AutoBits[PlcDic.MarkingComplete],
-                    PLC.Write.AutoBits[PlcDic.ScanImageTopDone],
-                    PLC.Write.AutoBits[PlcDic.ScanImageBottomDone],
-                    false,
-                    false,
-                    false,
-                    PLC.Write.AutoBits[PlcDic.LightOn[0]],
-                    PLC.Write.AutoBits[PlcDic.CheckFiducialOneDone],
-                    PLC.Write.AutoBits[PlcDic.CheckFiducialALLDone]
-                );
-                DataWritePLC[1] = WordConvert.Bit16ToWord(
-                    PLC.Write.AutoBits[PlcDic.ResultFace_Corrrect],
-                    false,
-                    PLC.Write.AutoBits[PlcDic.CheckCodeOneDone],
-                    PLC.Write.AutoBits[PlcDic.CheckCodeALLDone],
-                    PLC.Write.AutoBits[PlcDic.Result_Code_Exists],
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false
-                );
-                PLCDevice[0].WriteWords("7500", DataWritePLC);
-
-                //Word
-                DataWriteWPLC[1] = PLC.Write.WordUshorts[PlcDic.ModelNo];
-                DataWriteWPLC[10] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.MarkingPosX]).Upper;
-                DataWriteWPLC[11] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.MarkingPosX]).Lowwer;
-                DataWriteWPLC[12] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.MarkingPosY]).Upper;
-                DataWriteWPLC[13] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.MarkingPosY]).Lowwer;
-                DataWriteWPLC[14] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.CheckFiducial_PosX]).Upper;
-                DataWriteWPLC[15] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.CheckFiducial_PosX]).Lowwer;
-                DataWriteWPLC[16] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.CheckFiducial_PosY]).Upper;
-                DataWriteWPLC[17] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.CheckFiducial_PosY]).Lowwer;
-                DataWriteWPLC[18] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.CheckCode_PosX]).Upper;
-                DataWriteWPLC[19] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.CheckCode_PosX]).Lowwer;
-                DataWriteWPLC[20] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.CheckCode_PosY]).Upper;
-                DataWriteWPLC[21] = WordConvert.IntTo2Word(PLC.Write.WordIntegers[PlcDic.CheckCode_PosY]).Lowwer;
-                PLCDevice[0].WriteWords("7600", DataWriteWPLC);
-            }
-            catch (Exception ex)
-            {
-                WriteLogPC(LogType.Main, "PLC", ex.ToString());
-            }
-            StopwatchWritePLC.Stop();
-            TimeSpan ts2 = StopwatchWritePLC.Elapsed;
-            TimeWritePLC = $"{ts2.Seconds}.{PadLeftZeros(ts2.Milliseconds, 3)}";
-        }
-        // Auto Scan state:
-        // 0 = Idle, 1 = Waiting TOP capture/save, 10 = Waiting BOT capture/save,
-        // 2 = Wait PLC request release after success, 3 = Wait PLC request release after failure.
-        private int IndexProcessAutoScan = 0;
-        private int _autoScanCaptureResult = 0; // 0 = pending, 1 = success, -1 = failed
-        private string _autoScanError = "";
-        private DateTime _pendingLaserSetupCaptureAt = DateTime.MinValue;
-
-        public void AutoScanImage()
-        {
-            if (IsTestNoPLC) return;
-            if (PLCDevice == null || PLCDevice[0] == null || !PLCDevice[0].IsConnected) return;
-
-            bool requestTop = PLC.Read.AutoBits[PlcDic.ScanImageTop];
-            bool requestBottom = PLC.Read.AutoBits[PlcDic.ScanImageBottom];
-
-            // Fail a pending camera request if no frame arrives within five seconds.
-            Action<Bitmap, int, int> timedOutCapture = null;
-            lock (_laserSetupCaptureSync)
-            {
-                if (_pendingLaserSetupCapture != null &&
-                    _pendingLaserSetupCaptureAt != DateTime.MinValue &&
-                    (DateTime.Now - _pendingLaserSetupCaptureAt).TotalSeconds >= 5)
-                {
-                    timedOutCapture = _pendingLaserSetupCapture;
-                    _pendingLaserSetupCapture = null;
-                    _pendingLaserSetupCaptureCamera = -1;
-                    _pendingLaserSetupCaptureAt = DateTime.MinValue;
-                }
-            }
-            if (timedOutCapture != null)
-                timedOutCapture(null, 0, 0);
-
-            switch (IndexProcessAutoScan)
-            {
-                case 0:
-                    // Accept one surface request at a time.
-                    if (requestTop && !requestBottom)
-                    {
-                        PLC.Write.AutoBits[PlcDic.ScanImageTopDone] = false;
-                        PLC.Write.AutoBits[PlcDic.ScanImageBottomDone] = false;
-                        Interlocked.Exchange(ref _autoScanCaptureResult, 0);
-                        _autoScanError = "";
-                        IndexProcessAutoScan = 1;
-
-                        Ui(() =>
-                        {
-                            try
-                            {
-                                if (formModel == null || formModel.laserSettingLayout == null)
-                                    throw new InvalidOperationException("Laser Setting form is not initialized.");
-
-                                formModel.laserSettingLayout.SwitchSurface(LaserSettingLayout.LaserSurface.Top);
-                                if (!formModel.laserSettingLayout.ScanImageAuto((success, message) =>
-                                {
-                                    _autoScanError = message ?? "";
-                                    Interlocked.Exchange(ref _autoScanCaptureResult, success ? 1 : -1);
-                                }))
-                                {
-                                    _autoScanError = "Could not start TOP image scan.";
-                                    Interlocked.Exchange(ref _autoScanCaptureResult, -1);
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                _autoScanError = ex.Message;
-                                Interlocked.Exchange(ref _autoScanCaptureResult, -1);
-                                WriteLogPC(LogType.Vision, "Auto Scan TOP", ex.ToString());
-                            }
-                        });
-                    }
-                    else if (requestBottom && !requestTop)
-                    {
-                        PLC.Write.AutoBits[PlcDic.ScanImageTopDone] = false;
-                        PLC.Write.AutoBits[PlcDic.ScanImageBottomDone] = false;
-                        Interlocked.Exchange(ref _autoScanCaptureResult, 0);
-                        _autoScanError = "";
-                        IndexProcessAutoScan = 10;
-
-                        Ui(() =>
-                        {
-                            try
-                            {
-                                if (formModel == null || formModel.laserSettingLayout == null)
-                                    throw new InvalidOperationException("Laser Setting form is not initialized.");
-
-                                formModel.laserSettingLayout.SwitchSurface(LaserSettingLayout.LaserSurface.Bot);
-                                if (!formModel.laserSettingLayout.ScanImageAuto((success, message) =>
-                                {
-                                    _autoScanError = message ?? "";
-                                    Interlocked.Exchange(ref _autoScanCaptureResult, success ? 1 : -1);
-                                }))
-                                {
-                                    _autoScanError = "Could not start BOTTOM image scan.";
-                                    Interlocked.Exchange(ref _autoScanCaptureResult, -1);
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                _autoScanError = ex.Message;
-                                Interlocked.Exchange(ref _autoScanCaptureResult, -1);
-                                WriteLogPC(LogType.Vision, "Auto Scan BOTTOM", ex.ToString());
-                            }
-                        });
-                    }
-                    break;
-
-                case 1:
-                case 10:
-                    int captureResult = Interlocked.Exchange(ref _autoScanCaptureResult, 0);
-                    if (captureResult == 1)
-                    {
-                        if (IndexProcessAutoScan == 1)
-                            PLC.Write.AutoBits[PlcDic.ScanImageTopDone] = true;
-                        else
-                            PLC.Write.AutoBits[PlcDic.ScanImageBottomDone] = true;
-
-                        WriteLogPC(LogType.Vision, "Auto Scan",
-                            IndexProcessAutoScan == 1 ? "TOP image captured and saved successfully." : "BOTTOM image captured and saved successfully.");
-                        IndexProcessAutoScan = 2;
-                    }
-                    else if (captureResult == -1)
-                    {
-                        PLC.Write.AutoBits[PlcDic.ScanImageTopDone] = false;
-                        PLC.Write.AutoBits[PlcDic.ScanImageBottomDone] = false;
-                        WriteLogPC(LogType.Vision, "Auto Scan",
-                            "Scan failed: " + (string.IsNullOrWhiteSpace(_autoScanError) ? "Unknown capture/save error." : _autoScanError));
-                        IndexProcessAutoScan = 3;
-                    }
-                    break;
-
-                case 2:
-                case 3:
-                    // Hold the Done bit until PLC releases both request bits.
-                    if (!requestTop && !requestBottom)
-                    {
-                        PLC.Write.AutoBits[PlcDic.ScanImageTopDone] = false;
-                        PLC.Write.AutoBits[PlcDic.ScanImageBottomDone] = false;
-                        IndexProcessAutoScan = 0;
-                    }
-                    break;
-            }
-        }
-        private void Ui(Action action)
-        {
-            if (IsDisposed || Disposing) return;
-            if (InvokeRequired) BeginInvoke(action); else action();
-        }
-        private void PLCUpdateConnectionState(bool connected)
-        {
-            lbPLCConected.BackColor = connected ? Color.Green : Color.IndianRed;
-        }
-        private void PLCAddLog(string message)
-        {
-            WriteLogPC(LogType.Main, $"PLC{1}", message);
-        }
-        public void ConnectPLC(int index)
-        {
-            try
-            {
-                if (IsTestNoPLC) return;
-                if (!formOption.Parameters.PLC[index].Use) return;
-                if (PLCDevice != null)
-                    if (PLCDevice[index] != null)
-                    {
-                        if (PLCDevice[index].IsConnected)
-                        {
-                            PLCDevice[index].Disconnect();
-                        }
-                        PLCDevice[index].ConnectionChanged -= connected => Ui(() => PLCUpdateConnectionState(connected));
-                        PLCDevice[index].Log -= message => Ui(() => PLCAddLog(message));
-                        PLCDevice[index].Dispose();
-                    }
-                
-                PlcParity sParity = (PlcParity)Enum.Parse(typeof(PlcParity), formOption.Parameters.PLC[index].Parity, true);
-                PlcStopBits sStopBits = (PlcStopBits)Enum.Parse(typeof(PlcStopBits), formOption.Parameters.PLC[index].StopBits, true);
-
-                switch (formOption.Parameters.PLC[index].Protocol)
-                {
-                    case Class.Protocol.Modbus:
-                        {
-                            if (formOption.Parameters.PLC[index].Mode == ModbusMode.Tcp)
-                            {
-                                PLCDevice[index] = PlcFactory.Create(new PlcConfig
-                                {
-                                    Protocol = PlcProtocol.ModbusTcp,
-                                    IpAddress = formOption.Parameters.PLC[index].HostIP,
-                                    Port = formOption.Parameters.PLC[index].Port,
-                                    UnitId = 1,
-                                    AutoReconnect = true,
-                                    ReconnectInterval = 1000
-                                });
-                            }
-                            else
-                            {
-                                PLCDevice[index] = PlcFactory.Create(new PlcConfig
-                                {
-                                    Protocol = PlcProtocol.ModbusRtu,
-                                    ComPort = formOption.Parameters.PLC[index].PortName,
-                                    BaudRate = formOption.Parameters.PLC[index].BaudRate,
-                                    Parity = sParity,
-                                    StopBits = sStopBits,
-                                    UnitId = 1,
-                                    AutoReconnect = true
-                                });
-                            }
-                            break;
-                        }
-                    case Class.Protocol.XGT:
-                        {
-                            PLCDevice[index] = PlcFactory.Create(new PlcConfig
-                            {
-                                Protocol = PlcProtocol.LsXgtTcp,
-                                IpAddress = formOption.Parameters.PLC[index].HostIP,
-                                Port = 2004,
-                                XgtCpuType = PlcXgtCpuType.XgbMk,
-                                AutoReconnect = true
-                            });
-                            break;
-                        }
-                    case Class.Protocol.SLMP:
-                        {
-                            PLCDevice[index] = PlcFactory.Create(new PlcConfig
-                            {
-                                Protocol = PlcProtocol.MitsubishiSlmpTcp,
-                                IpAddress = formOption.Parameters.PLC[index].HostIP,
-                                Port = formOption.Parameters.PLC[index].Port,
-                                XgtCpuType = PlcXgtCpuType.XgbMk,
-                                AutoReconnect = true
-                            });
-                            break;
-                        }
-                    default:
-                        {
-
-                            break;
-                        }
-                }
-
-                PLCDevice[index].ConnectionChanged += connected => Ui(() => PLCUpdateConnectionState(connected));
-                PLCDevice[index].Log += message => Ui(() => PLCAddLog(message));
-
-                PLCDevice[index].Connect();
-            }
-            catch (Exception ex)
-            {
-                WriteLogPC(LogType.Main, "PLC Connect", ex.ToString());
-            }
-
-        }
-        public void DisconnectPLC(int index)
-        {
-            if (PLCDevice == null || index < 0 || index >= PLCDevice.Length) return;
-
-            if (PLCDevice[index] != null)
-            {
-              if (PLCDevice[index].IsConnected)
-                    PLCDevice[index].Disconnect();
-            }
-        }
-        public void PLCDispose(int index)
-        {
-            if (PLCDevice == null || index < 0 || index >= PLCDevice.Length) return;
-
-            if (PLCDevice[index] != null)
-            {
-                PLCDevice[index].Dispose();
-            }
-        }
-        #endregion
-        private void timer1_Tick(object sender, EventArgs e)
-        {
-            //CallModelAutoPLC();
-            if (CountIntervalTimer1++ > 20)
-            {
-                if (formOption != null)
-                {
-                    if (formOption.Parameters != null)
-                    {
-                        if (formOption.Parameters.CommonPath != null)
-                        {
-                            DeleteOldFolderImage(formOption.Parameters.CommonPath,1);
-                            //DeleteOldFolderImage(formOption.Parameters.CommonPath, 2);
-                        }
-                    }
-                }
-                RunContinueCam();
-               
-                CountIntervalTimer1 = 0;
-            }
-            InitialOneTimeTimer();
-         ;
-            if (!IsTestNoPLC)
-            {
-                //UpdateErrorListPLC1();
-                //UpdateErrorListPLC2();
-            }
-           
-            lbProcessStepNo.Text = ProcessIndex[2].ToString();
-            lbProcessStepName.Text = ProcessStepName;
-
-            lbTimeReadPLC.Text = TimeReadPLC;
-            lbTimeWritePLC.Text = TimeWritePLC;
-          
-            if (CountCheckPLC_On++ > 5)
-            {
-                CountCheckPLC_On = 0;
-                PLC.Write.AutoBits[PlcDic.ComFlash] = !PLC.Write.AutoBits[PlcDic.ComFlash];
-            }
-            //Hiển thị các trạng thái kết nối
-            UpdateLabelStatus();
-        }
-        private List<Label> ListLabelCamConnected = new List<Label>();
-        private List<Label> ListLabelAcqTimeCam = new List<Label>();
-        private List<Label> ListLabelVisionTimeCam = new List<Label>();
-        private void UpdateLabelStatus()
-        {
-            for (int i = 0; i < NumberOfCamera; i++)
-            {
-                if (_VisionSystem != null)
-                {
-                    if (_VisionSystem[i] != null)
-                    {
-                        if (_VisionSystem[i].CAM != null)
-                        {
-                            ListLabelCamConnected[i].BackColor = _VisionSystem[i].CAM.IsOpen ? Color.Green : Color.IndianRed;
-                        }
-                        ListLabelAcqTimeCam[i].Text = _VisionSystem[i].CamGrapTime.ToString();
-                        ListLabelVisionTimeCam[i].Text = _VisionSystem[i].TimeVision;
-                    }
-                }
-            }
-        }
-        private void CallModelAutoPLC()
-        {
-            if (formOption.Parameters.Option.CallModelManual) return;
-            ModelColumns Col = new ModelColumns();
-
-            int ModelNo = PLC.Read.WordUshorts[PlcDic.ModelNo];
-            if (ModelNo != ModelNoInternal)
-            {
-                if (ModelNo >= formModel.modelTable.Table.Rows.Count - 1) return;
-                if (formModel.modelTable.Table.Rows[ModelNo].Cells[Col.File].Value == null) return;
-                MachineMode = ModeMachine.Manual;
-
-                formModel.LoadAModel(ModelNo);
-                MachineMode = ModeMachine.Auto;
-                formMain.UpdateControlStatus();
-            }
-        }
-        private void InitialOneTimeTimer()
-        {
-            if (CountStartThread <= 30)
-            {
-                CountStartThread++;
-            }
-            if (CountStartThread == 10)
-            {
-                InitialPrinter();
-                threadCam1.Start();
-                ConnectPLC(0);
-                trd.Start();
-                panelPLC1.Visible = true;
-                panelPLC2.Visible = false;
-                panelScanner.Visible = false;
-                if (formOption != null)
-                    if (formOption.Parameters != null)
-                    {
-                        for (int i = 0; i < NumberOfCamera; i++)
-                        {
-                            if (formOption.Parameters.Cam[i] != null)
-                                if (formOption.Parameters.Cam[i].Use)
-                                {
-                                    PanelCamStatus[i].Visible = true;
-                                    for (int y = 0 ; y < formModel.ListFrmVisionFileSetup[i].GetRowCount(); y++)
-                                    {
-                                        if (formMain.CameraVisionDisplays[i] != null)
-                                            if (formMain.CameraVisionDisplays[i].List[y] != null)
-                                                formMain.CameraVisionDisplays[i].List[y].RefreshDisplay();
-                                    }
-                                }
-                        }
-                    }
-            }
-        }
-        /// <summary>
-        /// Initial VISION COGNEX
-        /// </summary>
-        public void InitializeVision()
-        {
-            _VisionSystem = new VisionSystem[NumberOfCamera];
-            for (int i = 0; i < _VisionSystem.Length; i++)
-            {
-                _VisionSystem[i] = new VisionSystem();
-            }
-            IsCamRunContinous = new bool[NumberOfCamera];
-                IsLiveCam = new bool[NumberOfCamera];
-        }
-        public void InitialAllCameras()
-        {
-            RunWithVisionRuntimeLock(InitialAllCamerasCore);
-        }
-        private void InitialAllCamerasCore()
-        {
-            if (_shutdownRequested) return;
-            formMain.SwitchModeAuto(ModeMachine.Manual);
-            if (formOption?.Parameters?.Cam == null || formModel?.modelParameter?.Cam == null) return;
-            if (formModel.modelParameter.Cam.Length != NumberOfCamera) return;
-
-            for (int i = 0; i < NumberOfCamera; i++)
-            {
-                if (i >= formOption.Parameters.Cam.Length || formOption.Parameters.Cam[i] == null) continue;
-                if (_VisionSystem[i] == null || formModel.modelParameter.Cam[i] == null) continue;
-
-                if (!formOption.Parameters.Cam[i].Use)
-                {
-                    DisposeVisionMasterProcesses(i);
-                    continue;
-                }
-
-                // Model Call changes PRC/exposure data, not the physical camera configuration.
-                // Reuse an already-open camera and reconnect only when it is missing/closed.
-                if (!IsTestNoCam[i] && (_VisionSystem[i].CAM == null || !_VisionSystem[i].CAM.IsOpen)) InitializeCamera(i);
-
-                InitialVisionMasterProcesses(i);
-
-                if (_VisionSystem[i].CAM != null && _VisionSystem[i].CAM.IsOpen && formModel.ListFrmVisionFileSetup[i].GetRowCount() > 0)
-                    ChangeParameterCam(i, 0);
-            }
-        }
-        private void DisposeVisionMasterProcesses(int cam)
-        {
-            if (_VisionSystem == null || cam < 0 || cam >= _VisionSystem.Length || _VisionSystem[cam] == null) return;
-            VisionMasterProcess[] processes = _VisionSystem[cam].VisionProcesses;
-            if (processes != null)
-            {
-                foreach (VisionMasterProcess process in processes)
-                {
-                    try { process?.Dispose(); } catch { }
-                }
-            }
-            _VisionSystem[cam].VisionProcesses = new VisionMasterProcess[0];
-            _VisionSystem[cam].IsVisionProcessInitial = false;
-        }
-        public void InitialVisionMasterProcesses(int cam)
-        {
-            if (_VisionSystem == null || cam < 0 || cam >= _VisionSystem.Length || _VisionSystem[cam] == null) return;
-            _VisionSystem[cam].IsVisionProcessInitial = false;
-
-            int numberOfPart = formModel.ListFrmVisionFileSetup[cam]?.GetRowCount() ?? 0;
-            if (numberOfPart <= 0)
-            {
-                DisposeVisionMasterProcesses(cam);
-                return;
-            }
-
-            // Calling the same model again must not dispose/reload identical PRC instances.
-            // Apart from being unnecessary, repeated VmProcedure.Dispose() is exactly where VM 4.3
-            // can hit its lazy-RelateIO assertion. Reuse the runtime when every PRC path is unchanged.
-            if (CanReuseVisionMasterProcesses(cam, numberOfPart))
-            {
-                _VisionSystem[cam].IsVisionProcessInitial = true;
-                BindVisionMasterDisplays(cam);
-                WriteLogPC(LogType.Vision, $"VisionMaster Cam{cam + 1}", $"Reused {numberOfPart} runtime procedure(s).");
-                return;
-            }
-
-            // A different PRC set must release the old procedures before loading the new set;
-            // VmProcedure.Load registers procedures globally and duplicate Flow entries are unsafe.
-            DisposeVisionMasterProcesses(cam);
-
-            VisionMasterProcess[] loaded = new VisionMasterProcess[numberOfPart];
-            try
-            {
-                for (int i = 0; i < numberOfPart; i++)
-                {
-                    loaded[i] = formModel.LoadVisionMasterProcessIndex(cam, i);
-                    if (loaded[i] == null || loaded[i].Procedure == null)
-                        throw new Exception($"VisionMaster PRC could not be loaded. Cam {cam + 1}, index {i}, file: {formModel.ListFrmVisionFileSetup[cam].GetFileName(i)}");
-                }
-
-                _VisionSystem[cam].VisionProcesses = loaded;
-                _VisionSystem[cam].IsVisionProcessInitial = true;
-                // Do NOT enable callbacks globally for every module. Runtime displays are bound to
-                // specific procedures below; enabling every module callback adds unnecessary work
-                // on each trigger when a PRC contains many tools.
-                BindVisionMasterDisplays(cam);
-                WriteLogPC(LogType.Vision, $"VisionMaster Cam{cam + 1}", $"Loaded {numberOfPart} runtime procedure(s).");
-            }
-            catch (Exception ex)
-            {
-                foreach (VisionMasterProcess process in loaded)
-                {
-                    try { process?.Dispose(); } catch { }
-                }
-                _VisionSystem[cam].VisionProcesses = new VisionMasterProcess[0];
-                _VisionSystem[cam].IsVisionProcessInitial = false;
-                WriteLogPC(LogType.Vision, $"VisionMaster Cam{cam + 1} Load", ex.ToString());
-            }
-        }
-        public void BindAllVisionMasterDisplays()
-        {
-            if (_shutdownRequested || formMain == null || !formMain.IsUiInitialized) return;
-            for (int cam = 0; cam < NumberOfCamera; cam++) BindVisionMasterDisplays(cam);
-        }
-        private void BindVisionMasterDisplays(int cam)
-        {
-            if (_shutdownRequested || formMain == null || !formMain.IsUiInitialized) return;
-            if (_VisionSystem == null || cam < 0 || cam >= _VisionSystem.Length || _VisionSystem[cam] == null) return;
-            if (formMain.CameraVisionDisplays == null || cam >= formMain.CameraVisionDisplays.Length || formMain.CameraVisionDisplays[cam] == null) return;
-
-            VisionMasterProcess[] processes = _VisionSystem[cam].VisionProcesses;
-            if (processes == null) return;
-            int count = Math.Min(processes.Length, formMain.CameraVisionDisplays[cam].List.Count);
-
-            for (int index = 0; index < count; index++)
-            {
-                VisionMasterProcess process = processes[index];
-                CameraVisionDisplay cameraDisplay = formMain.CameraVisionDisplays[cam].List[index];
-                if (process?.Procedure == null || cameraDisplay?.partOfCams == null || cameraDisplay.partOfCams.Length == 0 || cameraDisplay.partOfCams[0]?.mDisplay == null) continue;
-
-                // Same pattern as VisionMaster SDK samples: bind VmRenderControl once.
-                // Subsequent Procedure.Run() calls update the same render source automatically.
-                process.EnableDisplayCallbacks();
-                VisionMasterUiHelper.BindProcedure(cameraDisplay.partOfCams[0].mDisplay, process.Procedure);
-            }
-        }
-        private bool CanReuseVisionMasterProcesses(int cam, int numberOfPart)
-        {
-            VisionMasterProcess[] processes = _VisionSystem[cam].VisionProcesses;
-            if (processes == null || processes.Length != numberOfPart) return false;
-
-            for (int i = 0; i < numberOfPart; i++)
-            {
-                VisionMasterProcess process = processes[i];
-                string requestedFile = formModel.ListFrmVisionFileSetup[cam].GetFileName(i);
-                if (process == null || process.Procedure == null || !SameVisionFilePath(process.FilePath, requestedFile)) return false;
-            }
-            return true;
-        }
-        private static bool SameVisionFilePath(string path1, string path2)
-        {
-            try
-            {
-                path1 = NormalizeVisionPathForCompare(path1);
-                path2 = NormalizeVisionPathForCompare(path2);
-                if (string.IsNullOrWhiteSpace(path1) || string.IsNullOrWhiteSpace(path2)) return false;
-                return string.Equals(Path.GetFullPath(path1).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath(path2).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
-            }
-            catch { return string.Equals(path1?.Trim(), path2?.Trim(), StringComparison.OrdinalIgnoreCase); }
-        }
-        private static string NormalizeVisionPathForCompare(string path)
-        {
-            if (string.IsNullOrWhiteSpace(path)) return "";
-            path = path.Trim();
-            if (string.Equals(Path.GetExtension(path), ".vpp", StringComparison.OrdinalIgnoreCase))
-            {
-                string prc = Path.ChangeExtension(path, ".prc");
-                if (File.Exists(prc)) path = prc;
-            }
-            return path;
-        }
-        public void ChangeParameterCam(int cam, int index)
-        {
-            try
-            {
-                if (_VisionSystem[cam].CAM == null) return;
-                if (!_VisionSystem[cam].CAM.IsOpen) return;
-
-                if (formOption.Parameters.Cam[cam].ImageSource == ImageSource.Cam)
-                {
-                    _VisionSystem[cam].CAM.ExposureTime = formModel.ListFrmVisionFileSetup[cam].GetExposure(index);
-                }
-            }
-            catch (Exception ex)
-            {
-                //Log
-                WriteLogPC(LogType.Vision, $"ChangeParameterCam({cam}), index {index}", ex.ToString());
-            }
-        }
-
-        /// <summary>
-        /// Camera
-        /// </summary>
-        public void InitializeCamera(int index)
-        {
-            if (IsTestNoCam[index]) return;
-            try
-            {
-                _VisionSystem[index].StopWatchVision = new Stopwatch();
-
-                if (_VisionSystem[index].CAM != null)
-                {
-                    _VisionSystem[index].CAM.ImageReceived -= Camera_ImageReceived;
-                    _VisionSystem[index].CAM.Error -= Camera_Error;
-
-                    _VisionSystem[index].CAM.Dispose();
-                    _VisionSystem[index].CAM = null;
-                }
-
-                switch (formOption.Parameters.Cam[index].CameraManufacture)
-                {
-                    // Legacy VisionPro value is mapped to HIK so old parameter files can be reused
-                    // after migrating the vision runtime to VisionMaster.
-                    case CameraManufacture.VisionPro:
-                    case CameraManufacture.HIK:
-                        {
-                            _VisionSystem[index].CAM = new CamVisionClass.HIKCamera();
-                            break;
-                        }
-                    case CameraManufacture.Basler:
-                        {
-                            _VisionSystem[index].CAM = new CamVisionClass.BaslerCamera();
-                            break;
-                        }
-                    default: break;
-                }
-                _VisionSystem[index].CAM.No = index;
-
-                _VisionSystem[index].CAM.ImageReceived += Camera_ImageReceived;
-                _VisionSystem[index].CAM.Error += Camera_Error;
-                
-
-                switch (formOption.Parameters.Cam[index].CamConnectType)
-                {
-                    case CamConnectType.Gige:
-                        {
-                            _VisionSystem[index].CAM.Open(formOption.Parameters.Cam[index].HostIP);
-                            break;
-                        }
-                    case CamConnectType.Usb:
-                        {
-                            _VisionSystem[index].CAM.OpenByDeviceID(formOption.Parameters.Cam[index].HostIP);
-                            break;
-                        }
-                   
-                    default: break;
-                }
-                _VisionSystem[index].CAM.ExposureTime = formModel.ListFrmVisionFileSetup[index].GetExposure(0) ;
-
-                // _VisionSystem[index].CAM.Gain = (float)formModel.modelParameter.Cam[index].Gain;
-                //_VisionSystem[index].CAM.SetReverseX(formOption.Parameters.Cam[index].ReverseX);
-                //_VisionSystem[index].CAM.SetReverseY(formOption.Parameters.Cam[index].ReverseY);
-
-                switch (formOption.Parameters.Cam[index].TriggerMode)
-                {
-                    case TriggerMode.Software:
-                        {
-                            _VisionSystem[index].CAM.SetSoftwareTriggerMode();
-                            
-                            break;
-                        }
-                    case TriggerMode.HardwareAuto:
-                        {
-                            _VisionSystem[index].CAM.SetLineTriggerMode();
-                            _VisionSystem[index].CAM.SetLightStrobeMode(true);
-                            break;
-                        }
-                    case TriggerMode.HardwareManual:
-                        {
-                            _VisionSystem[index].CAM.SetLineTriggerMode();
-                            _VisionSystem[index].CAM.SetLightStrobeMode(false);
-                            break;
-                        }
-                    default: break;
-                }
-                _VisionSystem[index].CAM.StartGrabbing();
-            }
-            catch (Exception ex)
-            {
-                //Log
-                WriteLogPC(LogType.Vision, $"Cam Connect", $"Index:{index}, {ex.Message}");
-            }
-        }
-        private void TriggerOneWithLight1(int index)
-        {
-            if (_VisionSystem[index].TriggerOne)
-            {
-                PLC.Write.AutoBits[PlcDic.LightOn[index]] = true;
-                if (!PLC.Read.AutoBits[PlcDic.LightOn[index]])
-                {
-                    AcqStart(index);
-                    _VisionSystem[index].TriggerOne = false;
-                }
-            }
-
-        }
-        private bool AcqCanStart(int index)
-        {
-            // Check trigger model to see if it's okay to call acq fifo's StartAcquire method
-            if (_VisionSystem[index].CAM == null)
-                return false;
-            if (!_VisionSystem[index].CAM.IsOpen)
-                return false;
-
-            return true;
-        }
-        public void AcqStart(int index)
-        {
-            //if (_VisionSystem[index].IsTriggerStart) return;
-            try
-            {
-                if (AcqCanStart(index))
-                {
-                    _VisionSystem[index].StopWatchVision.Reset();
-                    _VisionSystem[index].StopWatchVision.Start();
-                    _VisionSystem[index].IsTriggerStart = true;
-                    _VisionSystem[index].CAM.SoftwareTrigger();
-                }
-
-            }
-            catch (Exception ex)
-            {
-                WriteLogPC(LogType.Vision, $"Cam{index}", $"{ex.Message}");
-
-            }
-          
-        }
-        public void LiveCamera(int cam)
-        {
-            if (MachineMode == ModeMachine.Auto) return;
-            if (IsCamRunContinous[cam]) return;
-            if (_VisionSystem[cam] == null) return;
-            if (_VisionSystem[cam].CAM == null) return;
-
-            _VisionSystem[cam].CAM.StopGrabbing();
-            _VisionSystem[cam].CAM.SetContinuousMode();
-            _VisionSystem[cam].CAM.StartGrabbing();
-        }
-        public void StopLiveCamera(int cam)
-        {
-            if (MachineMode == ModeMachine.Auto) return;
-            if (IsCamRunContinous[cam]) return;
-            if (_VisionSystem[cam] == null) return;
-            if (_VisionSystem[cam].CAM == null) return;
-
-            _VisionSystem[cam].CAM.StopGrabbing();
-            _VisionSystem[cam].CAM.SetSoftwareTriggerMode();
-            _VisionSystem[cam].CAM.StartGrabbing();
-        }
-        private void RunContinueCam()
-        {
-            if (MachineMode == ModeMachine.Auto) return;
-
-            for (int i = 0; i < NumberOfCamera; i++)
-            {
-                if (IsLiveCam[i]) return;
-                if (_VisionSystem[i] == null) return;
-                if (_VisionSystem[i].VisionProcesses == null) return;
-                if (_VisionSystem[i].VisionProcesses.Length == 0 || _VisionSystem[i].VisionProcesses[0] == null) return;
-
-                if (IsCamRunContinous[i])
-                {
-
-                    if (formOption.Parameters.Cam[i].ImageSource == ImageSource.Cam)
-                    {
-                        if (_VisionSystem[i].CAM == null) return;
-                        if (!PLC.Read.AutoBits[PlcDic.LightOn[i]])
-                            _VisionSystem[i].TriggerOne = true;
-                        //AcqStart(i);
-                    }
-                    else
-                    {
-                        TriggerCamManual(i,0, false, false);
-                    }
-                }
-            }
-
-        }
-        private void Camera_Error(object sender, CameraErrorEventArgs e)
-        {
-            ICamera camera = sender as ICamera;
-
-            WriteLogPC(LogType.Vision, $"Cam{camera.No}", $"{e.Message}, 0x{e.Message}");
-        }
-        private readonly object _laserSetupCaptureSync = new object();
-        private Action<Bitmap, int, int> _pendingLaserSetupCapture;
-        private int _pendingLaserSetupCaptureCamera = -1;
-
-        /// <summary>Request one camera frame for Laser Setup and pair it with the servo position at frame arrival.</summary>
-        public bool RequestLaserSetupCapture(int cameraIndex, Action<Bitmap, int, int> onCaptured)
-        {
-            if (onCaptured == null || _VisionSystem == null || cameraIndex < 0 || cameraIndex >= _VisionSystem.Length
-                || _VisionSystem[cameraIndex] == null || _VisionSystem[cameraIndex].CAM == null
-                || !_VisionSystem[cameraIndex].CAM.IsOpen)
-                return false;
-
-            lock (_laserSetupCaptureSync)
-            {
-                if (_pendingLaserSetupCapture != null) return false;
-                _pendingLaserSetupCapture = onCaptured;
-                _pendingLaserSetupCaptureCamera = cameraIndex;
-                _pendingLaserSetupCaptureAt = DateTime.Now;
-            }
-
-            // Continuous mode: use the next incoming frame. Software-trigger mode: request one frame.
-            if (_VisionSystem[cameraIndex].CAM.AcquisitionMode != CameraAcquisitionMode.Continuous)
-                AcqStart(cameraIndex);
-            return true;
-        }
-
-        private void Camera_ImageReceived(object sender,CameraImageEventArgs e)
-        {
-            ICamera camera = sender as ICamera;
-            if (camera == null) return;
-
-            int index = camera.No;
-            Action<Bitmap, int, int> scanCallback = null;
-            lock (_laserSetupCaptureSync)
-            {
-                if (_pendingLaserSetupCapture != null && _pendingLaserSetupCaptureCamera == index)
-                {
-                    scanCallback = _pendingLaserSetupCapture;
-                    _pendingLaserSetupCapture = null;
-                    _pendingLaserSetupCaptureCamera = -1;
-                    _pendingLaserSetupCaptureAt = DateTime.MinValue;
-                }
-            }
-
-            if (scanCallback != null)
-            {
-                Bitmap scanImage = null;
-                try
-                {
-                    // Read PLC positions only for the requested setup image, not for every camera frame.
-                    int servoX = PLC.Read.WordIntegers[PlcDic.CurentPosX];
-                    int servoY = PLC.Read.WordIntegers[PlcDic.CurentPosY];
-                    scanImage = (Bitmap)e.Image.Clone();
-                    scanCallback(scanImage, servoX, servoY);
-                    scanImage = null; // ownership passed to callback
-                }
-                catch (Exception ex)
-                {
-                    WriteLogPC(LogType.Vision, "Laser Setup Scan", ex.Message);
-                    // The pending request has already been consumed. Notify the caller so
-                    // Auto Scan cannot remain in its waiting state after a frame-processing error.
-                    try { scanCallback(null, 0, 0); } catch { }
-                }
-                finally
-                {
-                    if (scanImage != null) scanImage.Dispose();
-                }
-            }
-
-            Bitmap image = (Bitmap)e.Image.Clone();
-            e.Image.Dispose();
-            _VisionSystem[index].CamGrapTime = (int)_VisionSystem[index].CAM.GrabTimeMs;
-            // Xử lý ảnh ở camera/background thread
-            ProcessImage(index, image);
-            image.Dispose();
-        }
-        private void ProcessImage(int Cam, Bitmap image)
-        {
-            try
-            {
-                // Do some processing while acquiring next image
-                if (image != null)
-                {
-                    // image is already a private clone made by Camera_ImageReceived.
-                    // Reuse that same Bitmap all the way to VisionMaster instead of cloning it again.
-                    ImageInfo ImageGrap = new ImageInfo();
-                    ImageGrap.Image = image;
-                    ImageGrap.Coordinate = new Coordinate();
-
-                    
-                    if (_VisionSystem[Cam].CAM.AcquisitionMode != CameraAcquisitionMode.Continuous 
-                        && !formModel.IsliveCamModel)
-                    {
-                        switch (MachineMode)
-                        {
-                            case ModeMachine.Auto:
-                                {
-                                    _VisionSystem[Cam].ResultTriggerOne = TriggerCamAuto(Cam,_VisionSystem[Cam].TriggerIndex, ImageGrap, true, true);
-                                    _VisionSystem[Cam].FinishTrigger = true;
-                                   
-                                    break;
-                                }
-                            case ModeMachine.Manual:
-                                {
-                                    // Do not auto-fit the render view on every manual trigger.
-                                    // Re-fitting each frame is visually perceived as a jump/flicker.
-                                    TriggerCamAuto(Cam, _VisionSystem[Cam].TriggerIndex, ImageGrap, false, false);
-                                    break;
-                                }
-                            case ModeMachine.Teaching:
-                                {
-                                    formModel.RunOneVisionMasterProcessEdit(ImageGrap.Image);
-                                    break;
-                                }
-                            default: break;
-                        }
-                        PLC.Write.AutoBits[PlcDic.LightOn[Cam]] = false;
-                    }
-                    else
-                    {
-                        // ShowBitmap clones the frame before marshaling to the UI, so the camera
-                        // callback can safely dispose its source Bitmap after ProcessImage returns.
-                        VisionMasterUiHelper.ShowBitmap(formMain.CameraVisionDisplays[Cam].List[0].partOfCams[0].mDisplay, ImageGrap.Image);
-                    }
-                }
-            }
-            catch (Exception ex) 
-            {
-                //Log
-                _VisionSystem[Cam].ErrorGrap = true;
-                //_VisionSystem[0].FinishTrigger = true;
-                PLC.Write.AutoBits[PlcDic.LightOn[Cam]] = false;
-                WriteLogPC(LogType.Vision, $"Cam{Cam}", $"{ex.Message}");
-            }
-            _VisionSystem[Cam].StopWatchVision.Stop();
-            //_VisionSystem[Cam].TimeVision = _VisionSystem[Cam].StopWatchVision.ElapsedMilliseconds.ToString();
-            _VisionSystem[Cam].IsTriggerStart = false;
-        }
-        private void DestroyCamera()
-        {
-            if (_VisionSystem == null) return;
-
-            for (int i = 0; i < NumberOfCamera; i++)
-            {
-                if (i >= _VisionSystem.Length || _VisionSystem[i] == null) continue;
-
-                try { _VisionSystem[i].CAM?.Dispose(); } catch { }
-                _VisionSystem[i].CAM = null;
-
-                if (_VisionSystem[i].VisionProcesses != null)
-                {
-                    for (int j = 0; j < _VisionSystem[i].VisionProcesses.Length; j++)
-                    {
-                        try { _VisionSystem[i].VisionProcesses[j]?.Dispose(); } catch { }
-                        _VisionSystem[i].VisionProcesses[j] = null;
-                    }
-                    _VisionSystem[i].VisionProcesses = null;
-                }
-
-                try { _VisionSystem[i].LastInputImage?.Dispose(); } catch { }
-                _VisionSystem[i].LastInputImage = null;
-            }
-        }
-        /// <summary>
-        /// ThreadCam_Task1
-        /// </summary>
-        private void ThreadCam_Task1()
-        {
-            while (!_shutdownRequested)
-            {
-                ProcessCam(0);
-                //ProcessCam(1);
-                //ProcessCam(2);
-
-                TriggerOneWithLight1(0);
-                //TriggerOneWithLight1(1);
-                //TriggerOneWithLight1(2);
-                //TriggerOneWithLight1(3);
-
-                // Do not spin at 100% CPU while the machine is in Manual/Test mode.
-                // 1 ms still gives virtually immediate software-trigger response but leaves time
-                // for WinForms and VmRenderControl to repaint smoothly.
-                if (MachineMode == ModeMachine.Manual) Thread.Sleep(1);
-                else Thread.Yield();
-            }
-        }
-        int[] CountDelayErrorVision = new int[3];
-        private void ProcessCam(int index)
-        {
-            // Auto Fiducial owns the camera while its one-shot image is being acquired.
-            if (index == 0 && _autoFiducialOwnsCamera) return;
-
-            if (MachineMode == ModeMachine.Manual)
-            {
-                ProcessIndex[index] = 0;
-                _VisionSystem[0].FinishTrigger = false;
-                PLC.Write.AutoBits[PlcDic.FinishTrigger[index]] = false;
-                return;
-            }
-
-            switch (ProcessIndex[index])
-            {
-                case 0:
-                    {
-                        
-                        if (PLC.Read.AutoBits[PlcDic.TriggerCam[index]] )
-                        {
-                            PLC.Write.AutoBits[PlcDic.ResultCam[index]] = false;
-                            _VisionSystem[index].FinishTrigger = false;
-                            ProcessIndex[index] = 5;
-                        }
-                        break;
-                    }
-                case 5:
-                    {
-                        //TriggerCam
-                        CountDelayErrorVision[index] = 0;
-                        _VisionSystem[index].TriggerOne = true;
-                        ProcessIndex[index] = 10;
-                        break;
-                    }
-                case 10:
-                    {
-                        //_VisionSystem[index].FinishTrigger
-                        if (_VisionSystem[index].FinishTrigger)
-                        {
-                            PLC.Write.AutoBits[PlcDic.FinishTrigger[index]] = true;
-                            _VisionSystem[index].TriggerOne = false;
-                            ProcessIndex[index] = 15;
-                        }
-                        //else
-                        //{
-                        //    if (CountDelayErrorVision[index]++ > 9999999)
-                        //    {
-                        //        CountDelayErrorVision[index] = 0;
-                        //        ProcessIndex[index] = 11;
-                        //    }
-                        //}
-                        
-
-                        break;
-                    }
-                case 11:
-                    {
-                        if (CountDelayErrorVision[index]++ > 999999)
-                        {
-                            ProcessIndex[index] = 0;
-                        }
-                        break;
-                    }
-                case 15:
-                    {
-                        //Done
-                        {
-                            if (!PLC.Read.AutoBits[PlcDic.TriggerCam[index]])
-                            {
-                                _VisionSystem[index].FinishTrigger = false;
-                                PLC.Write.AutoBits[PlcDic.FinishTrigger[index]] = false;
-                                ProcessIndex[index] = 0;
-                            }
-                        }
-                        break;
-                    }
-
-                default: break;
-            }
-        }
-        public int TriggerCamAuto(int cam,int index, ImageInfo cogImage8Grey, bool IsFitImage, bool IsFilmStrip)
-        {
-            Stopwatch stopWatch = Stopwatch.StartNew();
-            int result = 0;
-            if (IsTestNoCam[cam]) return 0;
-            //if (!IsCamConnected) return 0;
-            if (!_VisionSystem[cam].IsVisionProcessInitial) return 0;
-            try
-            {
-                switch (cam)
-                {
-                    case 0:
-                        {
-                            result = VisionRun(cam, index, cogImage8Grey, IsFitImage, IsFilmStrip);
-                            break;
-                        }
-                    case 1:
-                        {
-                            result = VisionRun(cam, index, cogImage8Grey, IsFitImage, IsFilmStrip);
-                            break;
-                        }
-                    case 2:
-                        {
-                            result = VisionRun(cam, index, cogImage8Grey, IsFitImage, IsFilmStrip);
-                            break;
-                        }
-                    case 3:
-                        {
-                            result = VisionRun(cam, index, cogImage8Grey, IsFitImage, IsFilmStrip);
-                            break;
-                        }
-                    default: break;
-                }
-                int indexExport = 0;
-                CreatFilmStripOne(cam, indexExport, result, IsFilmStrip, cogImage8Grey?.Image);
-            }
-            catch (VM.PlatformSDKCS.VmException ex)
-            {
-                result = 0;
-                //Log
-                WriteLogPC(LogType.Vision, $"TriggerAutoCam{cam}, Index{index}", ex.Message);
-            }
-            catch (Exception ex)
-            {
-                //Log
-                WriteLogPC(LogType.Vision, $"TriggerAutoCam{cam}, Index{index}", ex.Message);
-                result = 0;
-            }
-            stopWatch.Stop();
-            TimeSpan ts = stopWatch.Elapsed;
-            _VisionSystem[cam].TimeVision = $"{ts.Seconds}.{PadLeftZeros(ts.Milliseconds, 3)}";
-            return result;
-        }
-        public int TriggerCamManual(int cam, int index, bool IsFitImage, bool IsFilmStrip)
-        {
-            Stopwatch stopWatch = Stopwatch.StartNew();
-            int result = 0;
-            if (!_VisionSystem[cam].IsVisionProcessInitial) return 0;
-
-            ImageInfo image = null;
-            try
-            {
-                image = GetImageVision(cam);
-                if (image == null || image.Image == null) return 0;
-
-                result = VisionRun(cam, index, image, IsFitImage, IsFilmStrip);
-                CreatFilmStripOne(cam, 0, result, IsFilmStrip, image.Image);
-                _VisionSystem[cam].FinishTrigger = true;
-               
-
-            }
-            catch (VM.PlatformSDKCS.VmException ex)
-            {
-                WriteLogPC(LogType.Vision, $"TriggerManualCam{cam}, Index{index}", ex.Message);
-            }
-            catch (Exception ex)
-            {
-                WriteLogPC(LogType.Vision, $"TriggerManualCam{cam}, Index{index}", ex.Message);
-            }
-            finally
-            {
-                image?.Image?.Dispose();
-            }
-            stopWatch.Stop();
-            TimeSpan ts = stopWatch.Elapsed;
-            _VisionSystem[cam].TimeVision = $"{ts.Seconds}.{PadLeftZeros(ts.Milliseconds, 3)}";
-            return result;
-        }
-
-        public ImageInfo GetImageVision(int cam)
-        {
-            ImageInfo thisImageRun = new ImageInfo { Coordinate = new Coordinate() };
-
-            try
-            {
-                switch (formOption.Parameters.Cam[cam].ImageSource)
-                {
-                    case ImageSource.Cam:
-                        return thisImageRun;
 
-                    case ImageSource.Folder:
-                        if (formOption.FolderImageFiles[cam] == null || formOption.FolderImageFiles[cam].Length == 0) return null;
-                        if (formOption.IndexImageFolder[cam] >= formOption.FolderImageFiles[cam].Length) formOption.IndexImageFolder[cam] = 0;
-
-                        string folderFile = formOption.FolderImageFiles[cam][formOption.IndexImageFolder[cam]];
-                        thisImageRun.Image = VisionMasterUiHelper.LoadBitmapUnlocked(folderFile);
-                        formOption.IndexImageFolder[cam]++;
-                        return thisImageRun;
-
-                    case ImageSource.File:
-                        string fileName = formOption.FileImagePaths[cam];
-                        if (string.IsNullOrWhiteSpace(fileName)) fileName = formOption.Parameters.Cam[cam].ImageFile;
-                        thisImageRun.Image = VisionMasterUiHelper.LoadBitmapUnlocked(fileName);
-                        return thisImageRun;
-                }
-            }
-            catch (Exception ex)
-            {
-                WriteLogPC(LogType.Vision, $"GetImageVision Cam{cam}", ex.ToString());
-            }
-
-            return thisImageRun.Image == null ? null : thisImageRun;
-        }
-        //private int VisionRun(int cam, int index, ImageInfo imageInput, bool isFitImage)
-        //{
-        //    return VisionRun(cam, index, imageInput, isFitImage, false);
-        //}
-        private int VisionRun(int cam, int index, ImageInfo imageInput, bool isFitImage, bool isFilmStrip)
-        {
-            lock (_visionRuntimeSync)
-            {
-                if (_shutdownRequested) return 0;
-                return VisionRunCore(cam, index, imageInput, isFitImage, isFilmStrip);
-            }
-        }
-        private int VisionRunCore(int cam, int index, ImageInfo imageInput, bool isFitImage, bool isFilmStrip)
-        {
-            int result = 0;
-
-            if (imageInput == null || imageInput.Image == null) return 0;
-
-            try
-            {
-                if (_VisionSystem[cam].VisionProcesses == null || index < 0 || index >= _VisionSystem[cam].VisionProcesses.Length)
-                    throw new Exception($"VisionMaster process index invalid. Cam {cam}, index {index}.");
-
-                VisionMasterProcess process = _VisionSystem[cam].VisionProcesses[index];
-                if (process == null)
-                    throw new Exception($"_VisionSystem[{cam}].VisionProcesses[{index}] == null");
-
-                if (MachineMode != ModeMachine.Teaching)
-                {
-                    // Trigger hot path: ONE camera Bitmap -> SetImageData -> Procedure.Run -> result.
-                    // Cache full-resolution input/output images only if FilmStrip saving really needs them.
-                    bool saveOriginal = isFilmStrip && formOption?.Parameters?.Cam != null && cam < formOption.Parameters.Cam.Length && formOption.Parameters.Cam[cam] != null && (formOption.Parameters.Cam[cam].SaveOrigin || formOption.Parameters.Cam[cam].SaveOriginSeparate);
-                    bool saveGraphic = isFilmStrip && formOption?.Parameters?.Cam != null && cam < formOption.Parameters.Cam.Length && formOption.Parameters.Cam[cam] != null && formOption.Parameters.Cam[cam].SaveGraphic;
-                    result = process.Run(imageInput.Image, saveOriginal, saveGraphic);
-
-                    WriteLogPC(LogType.Vision, $"Vision{cam},Index{index}", result.ToString());
-                    PLC.Write.AutoBits[PlcDic.ResultCam[cam]] = result != 0;
-
-                    //if (!string.IsNullOrWhiteSpace(process.LastError))
-                    //    WriteLogPC(LogType.Vision, $"Vision{cam},Index{index}", process.LastError);
-                }
-
-                // Do not write a UI + disk log for every successful trigger.
-                // In V10 this queued a WinForms ListView update and File.AppendAllText on every shot,
-                // which produced the visible stop-go repaint in the video. Errors are still logged.
-            }
-            catch (VM.PlatformSDKCS.VmException ex)
-            {
-                result = 0;
-                PLC.Write.AutoBits[PlcDic.ResultCam[cam]] = false;
-                WriteLogPC(LogType.Vision, $"Vision{cam},Index{index}", ex.Message);
-            }
-            catch (Exception ex)
-            {
-                result = 0;
-                PLC.Write.AutoBits[PlcDic.ResultCam[cam]] = false;
-                WriteLogPC(LogType.Vision, $"Vision{cam},Index{index}", ex.ToString());
-            }
-
-            _VisionSystem[cam].ErrorVision = result == 0;
-            return result;
-        }
-        /// <summary>
-        /// FilmStrip
-        /// </summary>
-      
-        public string FirstTimeTrigger = "";
-        private Bitmap ImageShowFilmStip = null;
-        private bool IsGettingResult = false;
-        private void CreatFilmStripOne(int cam, int index, int result, bool Enable, Bitmap sourceImage = null)
-        {
-            // Manual trigger passes Enable=false. The old guard had been commented out, so even a
-            // manual click performed directory creation, render capture/JPEG save and synchronous
-            // UI Invoke calls. That was one of the main causes of the visible trigger stutter.
-            if (!Enable) return;
-            if (formMain.CameraVisionDisplays[cam].List[index].partOfCams[0].mDisplay == null) return;
-            if (!formOption.Parameters.Cam[cam].SaveGraphic && !formOption.Parameters.Cam[cam].SaveOrigin) return;
-            string LotNo = formMain.scannedValue;
-            int Floor = cam == 0 ? PLC.Read.WordUshorts[PlcDic.ModelNo] : PLC.Read.WordUshorts[PlcDic.ModelNo];
-            string Cassette = cam == 0 ? "A" : "B";
-            string[] arrListStr = LotNo.Split(' ');
-            string LotNoString = arrListStr[0];
-            string FloorString = PadLeftZeros(Floor, 2);
-
-            //if (!Enable) return;
-            string Datetimenow = DateTime.Now.ToString("yyyy-MM-dd HH-mm-ss");
-            string FileName = $"{Datetimenow}";
-            string CamNoString = (cam + 1).ToString();
-            string thisCamJigNoString = PadLeftZeros(CamJigNo[cam], 6);
-            FileName += $"_index{index}_QR_{_VisionSystem[cam].Code}";
-            string ResultString = result == 1 ? "OK" : "NG";
-            string FolderName = DateTime.Now.ToString("yyyy-MM-dd");
-            string subpathOrigin = formOption.Parameters.CommonPath + $"\\Cam{CamNoString}\\Origin\\{FolderName}\\{formModel.modelParameter.ModelName}\\Lot_{formMain.txtLot.Text}\\{ResultString}" ;
-
-            string subpathOriginSeparate = formOption.Parameters.CommonPath + $"\\Cam{CamNoString}\\OriginSeparate\\{FolderName}\\{formModel.modelParameter.ModelName}\\Lot_{formMain.txtLot.Text}\\{ResultString}";
-
-            string subpathGraphic = formOption.Parameters.CommonPath + $"\\Cam{CamNoString}\\Graphic\\{FolderName}\\{formModel.modelParameter.ModelName}\\Lot_{formMain.txtLot.Text}\\{ResultString}" ;
-
-            bool IsExitFolderOrigin = Directory.Exists(subpathOrigin);
-            if (!IsExitFolderOrigin) Directory.CreateDirectory(subpathOrigin);
-
-            bool IsExitFolderOriginSeparate = Directory.Exists(subpathOriginSeparate);
-            if (!IsExitFolderOriginSeparate) Directory.CreateDirectory(subpathOriginSeparate);
-
-            bool IsExitFolderGraphic = Directory.Exists(subpathGraphic);
-            if (!IsExitFolderGraphic) Directory.CreateDirectory(subpathGraphic);
-            
-            string thisPathFileOrigin = subpathOrigin + "\\" + FileName + ".jpg";
-
-            string thisPathFileOriginSeparate = subpathOriginSeparate + "\\" + FileName + ".jpg";
-
-            string thisPathFileGraphic = subpathGraphic + "\\" + FileName + ".jpg";
-
-            SaveImageGraphic(thisPathFileGraphic, cam, index, sourceImage);
-            IsGettingResult = true;
-            CamJigNo[cam]++;
-            try
-            {
-                BeginInvoke(new Action(() =>
-                {
-                    UpdateResultTable();
-                    formMain.UpdateControlStatus();
-                    IsGettingResult = false;
-                }));
-            }
-            catch
-            {
-                IsGettingResult = false;
-            }
-            Bitmap original = sourceImage;
-            if (original == null && _VisionSystem[cam].VisionProcesses != null && index < _VisionSystem[cam].VisionProcesses.Length)
-                original = _VisionSystem[cam].VisionProcesses[index]?.LastInputImage;
-
-            if (formOption.Parameters.Cam[cam].SaveOrigin && original != null) original.Save(thisPathFileOrigin, ImageFormat.Jpeg);
-            if (formOption.Parameters.Cam[cam].SaveOriginSeparate && original != null) original.Save(thisPathFileOriginSeparate, ImageFormat.Jpeg);
-
-        
-        }
-        private void UpdateResultTable()
-        {
-           
-        }
-        private void DeleteOldFolderImage(string CommonPathDic,int cam )
-        {
-            try
-            {
-                if(cam == 1)
-                {
-                    string FolderDate = DateTime.Today.AddDays(-2).ToString("yyyy-MM-dd");
-                    string subpathOrigin1 = CommonPathDic + "\\Cam1\\Origin\\" + FolderDate;
-                    string subpathGraphic1 = CommonPathDic + "\\Cam1\\Graphic\\" + FolderDate;
-                    if (Directory.Exists(subpathOrigin1)) Directory.Delete(subpathOrigin1, true);
-                    if (Directory.Exists(subpathGraphic1)) Directory.Delete(subpathGraphic1, true);
-                }
-                else if(cam==2)
-                {
-                    string FolderDate = DateTime.Today.AddDays(-2).ToString("yyyy-MM-dd");
-                    string subpathOrigin2 = CommonPathDic + "\\Cam2\\Origin\\" + FolderDate;
-                    string subpathGraphic2 = CommonPathDic + "\\Cam2\\Graphic\\" + FolderDate;
-                    if (Directory.Exists(subpathOrigin2)) Directory.Delete(subpathOrigin2, true);
-                    if (Directory.Exists(subpathGraphic2)) Directory.Delete(subpathGraphic2, true);
-                }
-               
-            }
-            catch (Exception) { }
-
-        }
-
-        static Bitmap bmp_img_Display = null;
-        private void SaveImageGraphic(string Path, int cam, int index, Bitmap sourceImage = null)
-        {
-            try
-            {
-                if (formOption.Parameters.Cam[cam].SaveGraphic)
-                {
-                    if (File.Exists(Path)) throw new Exception($"{Path}, Graphic Image file already Exists.");
-                    Bitmap fallback = _VisionSystem[cam].VisionProcesses != null && index < _VisionSystem[cam].VisionProcesses.Length
-                        ? _VisionSystem[cam].VisionProcesses[index]?.LastOutputImage
-                        : null;
-                    if (fallback == null) fallback = sourceImage;
-
-                    bmp_img_Display = VisionMasterUiHelper.SaveRenderedImage(formMain.CameraVisionDisplays[cam].List[index].partOfCams[0].mDisplay, Path, fallback);
-                    if (bmp_img_Display == null) throw new Exception("VisionMaster display image is null.");
-
-                    ImageShowFilmStip?.Dispose();
-                    ImageShowFilmStip = new System.Drawing.Bitmap(bmp_img_Display);
-                    bmp_img_Display.Dispose();
-                    bmp_img_Display = null;
-                }
-            }
-            catch (AccessViolationException ex)
-            {
-                //Log
-                WriteLogPC(LogType.Vision, $"SaveImageGraphic", ex.Message);
-            }
-            catch (Exception ex)
-            {
-                //Log
-                WriteLogPC(LogType.Vision, $"SaveImageGraphic", ex.Message);
-            }
-        }
-        private string PadLeftZeros(int Data, int Count)
-        {
-            string text = "0000000000" + Math.Abs(Data);
-            if (Data < 0)
-            {
-                return "-" + text.Substring(text.Length - Count + 1);
-            }
-            string result = text.Substring(text.Length - Count);
-            return result;
-        }
-        /// <summary>
-        /// Scanner
-        /// </summary>
-        public void ScannerConnect()
-        {
-            try
+            if (updateSurfaceFileName)
             {
-                if (!Matrix220.IsOpen)
-                {
-                    Matrix220.PortName = formOption.Parameters.Scanner.PortName;
-                    Matrix220.BaudRate = formOption.Parameters.Scanner.BaudRate;
-                    Matrix220.DataBits = formOption.Parameters.Scanner.DataBits;
-                    Parity sParity = (Parity)Enum.Parse(typeof(Parity), formOption.Parameters.Scanner.Parity, true);
-                    StopBits sStopBits = (StopBits)Enum.Parse(typeof(StopBits), formOption.Parameters.Scanner.StopBits, true);
-                    Matrix220.Parity = sParity;
-                    Matrix220.StopBits = sStopBits;
-                    Matrix220.Open();
-                    lbScannerConected.BackColor = Matrix220.IsOpen ? Color.Green : Color.IndianRed;
-                }
+                if (currentSurface == LaserSurface.Top) topImageFileName = fileName;
+                else botImageFileName = fileName;
             }
-            catch (Exception ex)
-            {
-                //LOG
-                WriteLogPC(LogType.Main, "Scanner", "Connect Fail");
-                System.Windows.Forms.MessageBox.Show(ex.ToString(), "Scanner", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
-        }
-        public void ScannerDisconnect()
-        {
-            if (Matrix220.IsOpen)
-            {
-                Matrix220.Close();
-            }
-            lbScannerConected.BackColor = Matrix220.IsOpen ? Color.Green : Color.IndianRed;
-        }
-        private void Scanner_DataReceived(object sender, SerialDataReceivedEventArgs e)
-        {
-            string BarcodeReceived = Matrix220.ReadLine();
-
-            if (BarcodeReceived.Contains("\r"))
-            {
-                BarcodeReceived = BarcodeReceived.Replace("\r", "");
-            }
-            if (BarcodeReceived.Contains("\n"))
-            {
-                BarcodeReceived = BarcodeReceived.Replace("\n", "");
-            }
-            _VisionSystem[0].Code = BarcodeReceived;
-
-            Invoke(new EventHandler(DisplayBarcodeRecived));
-           
-                
-        }
-        private void DisplayBarcodeRecived(object s, EventArgs e)
-        {
-
-            //LOG
-            WriteLogPC(LogType.Main, "Scanner", $"Code: {_VisionSystem[0].Code}");
-        }
-
-        ///<summary>
-        /// Print - Laser marking
-        ///</summary>
-        public TcpListener Printerlistener;
-        private TcpClient Printerclient;
-        private NetworkStream Printerstream;
-        private readonly int Printerport = 1000;
-        public event Action<string> DataReceived;
-        public int IndexPatternAuto = 0;
-        public int RankIndex = 0;
-        public void InitialPrinter()
-        {
-            Printerlistener = new TcpListener(IPAddress.Any, Printerport);
-            Printerlistener.Start();
-            WriteLogPC(LogType.Main,"Printer","Server started on port " + Printerport);
-            Printerlistener.BeginAcceptTcpClient(new AsyncCallback(PrinterOnClientConnected), null);
-        }
-        public void PrinterOnClientConnected(IAsyncResult ar)
-        {
-            Printerclient = Printerlistener.EndAcceptTcpClient(ar);
-            Printerstream = Printerclient.GetStream();
-            WriteLogPC(LogType.Main, "Printer", "Client Connected");
 
-            Thread thread = new Thread(PrinterReceiveData);
-            thread.IsBackground = true;
-            thread.Start();
-            lblPrinterConnection.BackColor = Color.Green;
-        }
-        private void PrinterReceiveData()
-        {
-            byte[] buffer = new byte[1024];
-            while (Printerclient.Connected)
-            {
-                try
-                {
-                    int bytesRead = Printerstream.Read(buffer, 0, buffer.Length);
-                    if (bytesRead == 0) break;
-
-                    string receivedText = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                    //LOG
-                    this.Invoke(new Action(() =>
-                    {
-                        WriteLogPC(LogType.Main, "Priter", $"Recived: {receivedText}");
-                    }));
+            Bitmap loadedImage;
+            using (FileStream stream = new FileStream(fileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (Image source = Image.FromStream(stream))
+                loadedImage = new Bitmap(source);
 
-                    Printer_HandleDataReceived(receivedText);
-                    DataReceived?.Invoke(receivedText); // Gọi sự kiện
+            Image oldImage = markingImage.Image;
+            markingImage.Image = loadedImage;
+            if (oldImage != null)
+                oldImage.Dispose();
 
-                }
-                catch (Exception ex)
-                {
-                    WriteLogPC(LogType.Main, "Printer", "Receive error: " + ex.Message);
-                    break;
-                }
-            }
-            WriteLogPC(LogType.Main, "Printer", "Client disconnected");
-            Printerstream.Close();
-            Printerclient.Close();
-        }
-        public void PrinterSendData(string message)
-        {
-            if (Printerclient != null && Printerclient.Connected)
+            if (fitToViewport)
             {
-                byte[] data = Encoding.UTF8.GetBytes(message);
-                Printerstream.Write(data, 0, data.Length);
-
-                //LOG
-                this.Invoke(new Action(() => {
-                    WriteLogPC(LogType.Main, "Printer", $"Sent: {message}");
-                }));
-
+                imagePan = Point.Empty;
+                FitImageClick(this, EventArgs.Empty);
             }
             else
             {
-                //LOG
-                this.Invoke(new Action(() => {
-                    WriteLogPC(LogType.Main, "Printer", $"Sent: No client connected.");
-                }));
-
+                UpdateImageTransform();
             }
         }
-        private void Printer_HandleDataReceived(string PrinterReceived)
-        {
-            string SetPrintType;
-            string SetDirection;
-            string SetTextPosition;
-            string CurrentSerialNo;
-            string CurrentYMMDDN;
-            string[] ArrayPrintRecived;
-            string ThisPrintType;
-            try
-            {
 
-                if (true)
+        private void WireEvents()
+        {
+            Button[] tools = { toolQr, toolRightText, toolLeftText, toolTopText, toolBottomText };
+            foreach (Button tool in tools)
+            {
+                tool.MouseDown += ToolMouseDown;
+                tool.AllowDrop = false;
+            }
+
+            markingImage.AllowDrop = true;
+            imageViewport.AllowDrop = true;
+            markingImage.DragEnter += MarkingImageDragEnter;
+            markingImage.DragDrop += MarkingImageDragDrop;
+            imageViewport.DragEnter += MarkingImageDragEnter;
+            imageViewport.DragDrop += MarkingImageDragDrop;
+            markingImage.MouseWheel += MarkingImageMouseWheel;
+            imageViewport.MouseWheel += MarkingImageMouseWheel;
+            markingImage.MouseEnter += ImageAreaMouseEnter;
+            imageViewport.MouseEnter += ImageAreaMouseEnter;
+            markingImage.TabStop = true;
+            imageViewport.TabStop = true;
+            markingImage.MouseDown += PanMouseDown;
+            markingImage.MouseMove += PanMouseMove;
+            markingImage.MouseUp += PanMouseUp;
+            markingImage.MouseDown += AddFiducialAtMouseDown;
+            imageViewport.MouseDown += PanMouseDown;
+            imageViewport.MouseMove += PanMouseMove;
+            imageViewport.MouseUp += PanMouseUp;
+            imageViewport.MouseDown += AddFiducialAtMouseDown;
+            imageViewport.Resize += ImageViewportResize;
+            markingList.SelectionChanged += MarkingListSelectionChanged;
+            markingList.MultiSelect = true;
+            markingList.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            markingList.DefaultCellStyle.SelectionBackColor = Color.LightGreen;
+            markingList.DefaultCellStyle.SelectionForeColor = Color.Black;
+            markingList.RowsDefaultCellStyle.BackColor = Color.LightGray;
+            markingList.CellEndEdit += MarkingListCellEndEdit;
+            markingList.DataError += (s, e) => { e.ThrowException = false; };
+            fiducialList.CellEndEdit += FiducialListCellEndEdit;
+            fiducialList.DataError += (s, e) => { e.ThrowException = false; };
+            positionX.ValueChanged += PositionValueChanged;
+            positionY.ValueChanged += PositionValueChanged;
+            imagePixelToMmValue.TextChanged += ResolutionValueTextChanged;
+            //printType.SelectedIndexChanged += PrintTypeChanged;
+            markingContent.TextChanged += MarkingContentChanged;
+            detailsButton.Click += DetailsButtonClick;
+            imageViewport.Paint += ImageViewportPaint;
+            markingImage.Paint += MarkingImagePaint;
+            markingImage.MouseDown += SelectionMouseDown;
+            markingImage.MouseMove += SelectionMouseMove;
+            markingImage.MouseUp += SelectionMouseUp;
+            imageViewport.MouseDown += SelectionMouseDown;
+            imageViewport.MouseMove += SelectionMouseMove;
+            imageViewport.MouseUp += SelectionMouseUp;
+            moveUp.Click += MoveUpClick;
+            moveDown.Click += MoveDownClick;
+            deleteMarking.Click += DeleteMarkingClick;
+            deleteAllMarking.Click += DeleteAllMarkingClick;
+            alignLeft.Click += (s, e) => AlignSelected(0);
+            alignCenter.Click += (s, e) => AlignSelected(1);
+            alignRight.Click += (s, e) => AlignSelected(2);
+            alignTop.Click += (s, e) => AlignSelected(3);
+            alignMiddle.Click += (s, e) => AlignSelected(4);
+            alignBottom.Click += (s, e) => AlignSelected(5);
+            distributeHorizontal.Click += (s, e) => DistributeSelected(true);
+            distributeVertical.Click += (s, e) => DistributeSelected(false);
+            fitImage.Click += FitImageClick;
+            zoomIn.Click += ZoomInClick;
+            zoomOut.Click += ZoomOutClick;
+            btnloadimage.Click += LoadImageClick;
+            scanImage.Click += ScanImageClick;
+            dgvListPictureSub.CellDoubleClick += PictureGridCellDoubleClick;
+            dgvListPictureSub.MouseLeave += PictureGridMouseLeave;
+            dgvListPictureSub.CellValueChanged += PictureGridCellValueChanged;
+            dgvListPictureSub.CellEndEdit += PictureGridCellEndEdit;
+            dgvListPictureSub.DataError += (s, e) => { e.ThrowException = false; };
+            btnAddPicture.Click += AddPicturesClick;
+            btnDeletePic.Click += DeleteSelectedPicturesClick;
+            btnPicDeleteAll.Click += DeleteAllPicturesClick;
+            addFiducial.Click += AddFiducialClick;
+            deleteFiducial.Click += DeleteFiducialClick;
+            deleteAllFiducial.Click += (s, e) => DeleteAllFiducials();
+            btnTop.Click += (s, e) => SwitchSurface(LaserSurface.Top);
+            btnBot.Click += (s, e) => SwitchSurface(LaserSurface.Bot);
+            saveOne.Click += SaveOneClick;
+            saveAll.Click += SaveAllClick;
+            discard.Click += DiscardClick;
+        }
+
+        public void LoadSurfaceParameters(CamPara camera)
+        {
+            topImageFileName = camera == null ? "" : GetTopImageFile(camera);
+            botImageFileName = camera == null ? "" : camera.LaserBotImageFile;
+            topParameters = CloneSurface(camera == null ? null : camera.Top);
+            botParameters = CloneSurface(camera == null ? null : camera.Bot);
+            if (!File.Exists(topImageFileName) && topParameters.ScanImages.Count > 0)
+                topImageFileName = ResolvePicturePath(topParameters.ScanImages[0]);
+            if (!File.Exists(botImageFileName) && botParameters.ScanImages.Count > 0)
+                botImageFileName = ResolvePicturePath(botParameters.ScanImages[0]);
+            savedTopParameters = CloneSurface(topParameters);
+            savedBotParameters = CloneSurface(botParameters);
+            currentSurface = LaserSurface.Top;
+            ListPicture.Text = "Picture - TOP";
+            RebuildSurfaceImage(LaserSurface.Top);
+            RebuildSurfaceImage(LaserSurface.Bot);
+            btnTop.BackColor = Color.LightGreen;
+            btnBot.BackColor = Color.WhiteSmoke;
+            LoadSurfaceImage(topImageFileName);
+            LoadCurrentSurfaceToControls();
+            RefreshPictureGrid();
+            FitImageClick(this, EventArgs.Empty);
+        }
+
+        public void ApplySurfaceParameters(CamPara camera)
+        {
+            if (camera == null) return;
+            SaveCurrentSurfaceToMemory();
+            camera.Top = CloneSurface(topParameters);
+            camera.Bot = CloneSurface(botParameters);
+            camera.LaserTopImageFile = topImageFileName;
+            camera.LaserBotImageFile = botImageFileName;
+            camera.LaserImageFile = topImageFileName;
+            camera.ResolutionImage = currentSurface == LaserSurface.Top ? topParameters.ResolutionImage : botParameters.ResolutionImage;
+        }
+
+        private static LaserSurfaceParameter CloneSurface(LaserSurfaceParameter source)
+        {
+            LaserSurfaceParameter target = new LaserSurfaceParameter();
+            if (source == null) return target;
+            target.ResolutionImage = source.ResolutionImage;
+            foreach (LaserMarkingParameter marking in source.Markings ?? new List<LaserMarkingParameter>())
+                target.Markings.Add(new LaserMarkingParameter { Id = marking.Id, ImageId = marking.ImageId ?? "", Product = marking.Product, Type = marking.Type, PrintType = marking.PrintType, Content = marking.Content, PositionX = marking.PositionX, PositionY = marking.PositionY, Rotate = marking.Rotate });
+            foreach (LaserFiducialParameter point in source.Fiducials ?? new List<LaserFiducialParameter>())
+                target.Fiducials.Add(new LaserFiducialParameter { Id = point.Id, ImageId = point.ImageId ?? "", PositionX = point.PositionX, PositionY = point.PositionY });
+            target.ImagePixelToMM = source.ImagePixelToMM > 0 ? source.ImagePixelToMM : source.ResolutionImage;
+            target.ResolutionImageRobot = source.ResolutionImageRobot > 0 ? source.ResolutionImageRobot : source.ResolutionImage;
+            target.EnableServoAxisTransform = source.EnableServoAxisTransform;
+            target.SwapServoAxes = source.SwapServoAxes;
+            target.ReverseServoX = source.ReverseServoX;
+            target.ReverseServoY = source.ReverseServoY;
+            target.HasStitchCoordinateSystem = source.HasStitchCoordinateSystem;
+            target.StitchOriginX = source.StitchOriginX;
+            target.StitchOriginY = source.StitchOriginY;
+            target.StitchPixelToMM = source.StitchPixelToMM;
+            target.ImageLocalCoordinateVersion = source.ImageLocalCoordinateVersion;
+            foreach (LaserScanImageParameter picture in source.ScanImages ?? new List<LaserScanImageParameter>())
+                target.ScanImages.Add(new LaserScanImageParameter
                 {
-                    if (PrinterReceived == null || PrinterReceived == "")
-                        throw new Exception("Print Data Recived Empty");
-                    if (IndexPatternAuto >= formModel.laserSettingLayout.markings.Count)
-                    {
-                        PrinterSendData(" ");
-                        return;
-                    }
-                    //if (CurrentTimeMarking >= formModel.modelParameter.patterns[IndexPatternAuto].MarkingTime)
-                    //{
-                    //    DetectFinishAPatternPrint = true;
-                    //}
-
-                    string ThisDirection = "";
-                    string ThisPosition = "";
-
-                    ArrayPrintRecived = PrinterReceived.Split(' ');
-                    ThisPrintType = ArrayPrintRecived[0];
-                    // ThisPrintType : CODE OR TEXT
-                    if (ArrayPrintRecived.Length >= 2) ThisDirection = ArrayPrintRecived[1];
-                    // ThisDirection : 0 OR 90
-                    if (ArrayPrintRecived.Length >= 3) ThisPosition = ArrayPrintRecived[2];
-                    // This Position : BOTTOM, RIGHT, LEFT, TOP
-                    SetPrintType = formModel.laserSettingLayout.markings[IndexPatternAuto].PrintType;
-                    //SET PrintType : Code, Text1, Text 2, Text 3, Code Text 1, Code Text 2, Code Text 3
-                    SetDirection = formModel.laserSettingLayout.markings[IndexPatternAuto].Rotate;
-                    // Set Direction : 0 or 90
-                    SetTextPosition = formModel.laserSettingLayout.markings[IndexPatternAuto].Type;
-                    // set text position : Top, Bottom, Left, Right 
-
-                    CurrentSerialNo = formModel.laserSettingLayout.markings[IndexPatternAuto].Content;
-                    CurrentYMMDDN = formMain.txtYMMDDN.Text;
-
-                    // Chỗ này cần cập nhật Rank theo bảng Rank mới.
-                    // Lấy dữ liệu rank
-                    string CurrentRank = formMain.txtRank.Text;
-                    if (formOption.Parameters.MES.MesEnabel)
-                    {
-                        if (MesDataInfomation.Rank.Length != 0)
-                        {
-                            if (formMain.dgvRank.Rows.Count > 0)
-                            {
-                                if (RankIndex < formMain.dgvRank.Rows.Count - 1)
-                                {
-                                    CurrentRank = formMain.dgvRank.Rows[RankIndex].Cells[0].Value.ToString();
-                                }
-                            }
-                        }
-                    }
-                    if (CurrentSerialNo == "" || CurrentYMMDDN == "")
-                        throw new Exception("Serial No or YMMDDN is Empty");
-                    string DataEmpty = " ";
-                    string DataCodeEmpty = " ";
-                    string CodeSend = CurrentYMMDDN + CurrentSerialNo+ CurrentRank;
-
-                    string TextSend = CurrentSerialNo + Environment.NewLine + CurrentYMMDDN + Environment.NewLine + CurrentRank;
-                    // Đoạn này sẽ kiểm tra xem là có phải dạng Text1, text 2, text 3 hay k
-                    //if (SetPrintType.Contains(PrintOption.PrintType.Text1))
-                    //{
-                    //    if (formOption.Parameters.Option.BarcodeRankPrint)
-                    //    {
-                    //        TextSend = CurrentRank;
-                    //    }
-                    //    else
-                    //    {
-                    //        TextSend = CurrentSerialNo;
-                    //    }
-                    //}
-                    //else
-                    //{
-                    //    if (SetPrintType.Contains(PrintOption.PrintType.Text2))
-                    //    {
-                    //        TextSend = CurrentYMMDDN + Environment.NewLine + CurrentRank;
-                    //    }
-                    //    else
-                    //    {
-                    //        if (SetPrintType.Contains(PrintOption.PrintType.Text3))
-                    //        {
-                    //            TextSend = CurrentSerialNo + Environment.NewLine + CurrentYMMDDN + Environment.NewLine + CurrentRank;
-                    //        }
-                    //    }
-                    //}
-
-                    // xử lý khi trong quá trình Auto
-                    if (true)
-                    {
-                        // trên phần mề EzCard setting Code
-                        if (ThisPrintType == "CODE")
-                        {
-                            if (SetPrintType==ThisPrintType)
-                            {
-                                
-                                    //Gửi xuống máy in
-                                    PrinterSendData(CodeSend);
-
-                                    //if (PLC.Read.Auto.Auto)
-                                    //{
-                                    //    //LOG
-                                    //    this.Invoke(new Action(() =>
-                                    //    {
-                                    //        UpdatePrintScanDataTable(SttUpdatePrintDatatable, CodeSend, null, false);
-                                    //    }));
-
-                                    //    SttUpdatePrintDatatable++;
-                                    //}
-                                    //PLC.Write.Auto.restart_triger = true;
-                                    //nếu không chứa Text thì mới tăng lên 1
-                                    //if (SetPrintType == "Code")
-                                    //{
-                                    //    // Tăng Serial lên
-                                    //    IncreaseOneSerialNo();
-                                    //}
-                            }
-                            else PrinterSendData(DataCodeEmpty);
-                        }
-                        else
-                        {
-                            if (SetPrintType.Contains("Text"))
-                            {
-                                if (ThisPrintType == SetPrintType&& ThisDirection == SetDirection && ThisPosition == SetTextPosition)
-                                {
-                                    PrinterSendData(TextSend);
-                                    //CurrentTimeMarking++;
-                                    //PLC.Write.Auto.restart_triger = true;
-                                    //// Tăng Serial lên
-                                    //IncreaseOneSerialNo();
-
-                                }
-                            }
-                            else PrinterSendData(DataEmpty);
-
-
-                        }
-                    }
-                }
-
-            }
-            catch (Exception ex)
-            {
-                //LOG
-                this.Invoke(new Action(() =>
-                {
-                    WriteLogPC(LogType.Main, "Printer_Handle", ex.Message);
-                }));
-            }
-        }
-        public void PrinterStop()
-        {
-            Printerstream?.Close();
-            Printerclient?.Close();
-            Printerlistener?.Stop();
-            WriteLogPC(LogType.Main, "Printer", $"Server stopped.");
-            
-        }
-        private void IncreaseOneSerialNo()
-        {
-            //LOG
-            this.Invoke(new Action(() => {
-                int CurrentSerialNo_int = Convert.ToInt32(formMain.txtSerialNo.Text);
-                string NewSerialNo = PadLeftZeros(CurrentSerialNo_int + 1, 6);
-                formMain.txtSerialNo.Text = NewSerialNo;
-                formMain.txt1STbarcode.Text = formMain.txtYMMDDN.Text + formMain.txtSerialNo.Text;
-
-
-                //Reset Rank Index
-                if (formOption.Parameters.MES.MesEnabel)
-                {
-                    InitialDGVRank();
-                    if (MesDataInfomation.Rank != null)
-                    {
-                        RankIndex++;
-                        if (RankIndex >= MesDataInfomation.Rank.Length)
-                        {
-                            RankIndex = 0;
-                        }
-                    }
-                    else
-                    {
-                        RankIndex = 0;
-                    }
-                }
-                else
-                {
-                    RankIndex++;
-                    if (RankIndex >= 2) RankIndex = 0;
-                }
-
-
-            }));
-
-        }
-        private void InitialDGVRank()
-        {
-
-            for (int i = 0; i < formMain.dgvRank.Rows.Count; i++)
-            {
-                formMain.dgvRank.Rows[i].DefaultCellStyle.BackColor = Color.White;
-            }
-            formMain.dgvRank.Rows[RankIndex].DefaultCellStyle.BackColor = Color.Green;
-            formMain.lbRankIndex.Text = $"Rank {RankIndex}";
-            if (formOption.Parameters.MES.MesEnabel)
-            {
-                formMain.txtRank.Text = formMain.dgvRank.Rows[RankIndex].Cells[0].Value.ToString();
-                
-               
-            }
-
-        }
-        /// <summary>
-        /// Mes
-        /// </summary>
-        public MESComunication MES = new MESComunication();
-        public DataInfomationSend MesDataInfomation = new DataInfomationSend();
-        public void InitialMes()
-        {
-            MES = new MESComunication();
-            MES.TransferLog += new MESComunication.TransferLogData(MES_TransferLog);
-            MES.ProtocolException += new MESComunication.ProtocolExceptionEventHandler(MES_PrEx);
-        }
-        private void MES_TransferLog(object sender, string Type, string Data)
-        {
-            //Log
-            this.Invoke(new Action(() =>
-            {
-                WriteLogPC(LogType.Mes, Type, Data);
-            }));
-        }
-        private void MES_PrEx(object sender, ExceptionCode exCode, string information)
-        {
-            //Log
-            this.Invoke(new Action(() =>
-            {
-                WriteLogPC(LogType.Mes, exCode.ToString(), information);
-            }));
-        }
-        /// <summary>
-        /// Alarm - Log - Error List
-        /// </summary>
-        private readonly object _logFileLock = new object();
-
-        private void WriteLogError(string logType, string errorCode, string errorContent)
-        {
-            if (formOption.Parameters == null || formOption.Parameters.CommonPath == null) return;
-
-            try
-            {
-                string dayTime = DateTime.Now.ToString("MM-dd-yyyy HH:mm:ss");
-                string dateFolder = DateTime.Now.ToString("MM-yyyy");
-                string dateFile = DateTime.Now.ToString("MM-dd-yyyy");
-                string path = Path.Combine(formOption.Parameters.CommonPath, logType + "Log", dateFolder);
-                string fileName = Path.Combine(path, $"{logType}Log_{dateFile}.csv");
-
-                Directory.CreateDirectory(path);
-                errorCode = (errorCode ?? "").Replace("\r", " ").Replace("\n", " ");
-                errorContent = (errorContent ?? "").Replace("\r", " ").Replace("\n", " ");
-
-                lock (_logFileLock)
-                {
-                    if (!File.Exists(fileName)) File.WriteAllText(fileName, "STT,DayTime,Code,Content" + Environment.NewLine, Encoding.UTF8);
-                    string line = $"0,{dayTime},{errorCode},{errorContent}{Environment.NewLine}";
-                    File.AppendAllText(fileName, line, Encoding.UTF8);
-                }
-            }
-            catch (IOException ex) { Console.WriteLine(ex); }
-            catch (Exception ex) { Console.WriteLine(ex); }
+                    Id = string.IsNullOrWhiteSpace(picture.Id) ? Guid.NewGuid().ToString("N") : picture.Id,
+                    ImagePath = picture.ImagePath,
+                    ServoX = picture.ServoX,
+                    ServoY = picture.ServoY,
+                    CaptureTime = picture.CaptureTime
+                });
+            return target;
         }
 
-        public void WriteLogPC(LogType logType, string code, string content)
+        private LaserSurfaceParameter CurrentParameters
         {
-            string dateTimeNow = DateTime.Now.ToString("HH:mm:ss");
-            string fileGroup = logType == LogType.Main ? "MAIN" : logType == LogType.Mes ? "MES" : "Vision";
-
-            // File IO is never executed on the WinForms thread. Slow SSD/network/antivirus activity
-            // therefore cannot freeze VmRenderControl repaint during a trigger.
-            ThreadPool.QueueUserWorkItem(_ => WriteLogError(fileGroup, code, content));
-
-            if (formMain == null || formMain.IsDisposed || !formMain.IsHandleCreated) return;
-            Action updateUi = () =>
-            {
-                if (formMain.IsDisposed) return;
-                ListView list = logType == LogType.Main ? formMain.listViewMainLog : formMain.listViewMesLog;
-                ListViewItem item = new ListViewItem(dateTimeNow);
-                item.SubItems.Add(code);
-                item.SubItems.Add(content);
-                list.Items.Add(item);
-                if (list.Items.Count > 20) list.Items.RemoveAt(0);
-                if (list.Items.Count > 0) list.Items[list.Items.Count - 1].EnsureVisible();
-            };
-
-            try
-            {
-                if (formMain.InvokeRequired) formMain.BeginInvoke(updateUi);
-                else updateUi();
-            }
-            catch (ObjectDisposedException) { }
-            catch (InvalidOperationException) { }
+            get { return currentSurface == LaserSurface.Top ? topParameters : botParameters; }
         }
-        private string[,] ReadErrorListContent(int index)
-        {
-            string[,] result = new string[2, 300];
-            try
-            {
-                string PathFileParameter = $"D:\\InitialData\\ErrorListPLC{index}.csv";
-                if (!File.Exists(PathFileParameter)) return null;
-                string[] lines = File.ReadAllLines(PathFileParameter, Encoding.UTF8);
-                if (lines.Length == 0) return null;
-                ErrorListCount[index] = lines.Length;
-                result = new string[2, lines.Length];
-                for (int i = 0; i < lines.Length; i++)
-                {
-                    result[0, i] = lines[i].Split(',')[0];
-                    result[1, i] = lines[i].Split(',')[1];
-                }
-                IsReadErrorList[index] = true;
-            }
-            catch (IOException ex)
-            {
-                result = null;
-                System.Windows.Forms.MessageBox.Show(ex.ToString(), "Read Error List", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-            return result;
-        }
-        
-        private void UpdateErrorListPLC1()
-        {
-            if (!IsReadErrorList[0]) return;
 
-            bool IsErrorPLCTrigger = false;
-            bool IsErrorEmpty = true;
-            for (int i = 0; i < 14; i++)
-            {
-                if (PLC.Read.ErrorWord[i] != 0)
-                {
-                    IsErrorEmpty = false;
-                }
-                if (CurrentErrorWord1[i] != PLC.Read.ErrorWord[i])
-                {
-                    IsErrorPLCTrigger = true;
-                }
-            }
-            if (IsErrorPLCTrigger && !IsErrorEmpty)
-            {
-                for (int i = 0; i < ErrorListCount[0]; i++)
-                {
-                    if (PLC.Read.ErrorBits[i])
-                    {
-                        //LOG
-                        WriteLogPC(LogType.Main, ErrorListContent1[0, i], ErrorListContent1[1, i]);
-                    }
-                }
-                for (int i = 0; i < 14; i++)
-                {
-                    CurrentErrorWord1[i] = PLC.Read.ErrorWord[i];
-                }
-            }
+        public LaserSurface CurrentSurface
+        {
+            get { return currentSurface; }
         }
 
         /// <summary>
-        /// vissionData
+        /// Returns the machine coordinate of a saved Fiducial row on the active surface.
+        /// The returned coordinate uses the same servo/mm-per-pixel transform as the Model UI.
+        /// Call on the WinForms UI thread.
         /// </summary>
-     
-      
-       
-        #region AUTO LASER MARKING - SHARED CORE
-
-        // Configure these names to match the numeric outputs in the Fiducial VisionMaster PRC.
-        // Leave empty until the PRC output names are confirmed; Auto must fail closed if not configured.
-        public string AutoFiducialXOutputName = "Fiducial_X";
-        public string AutoFiducialYOutputName = "Fiducial_Y";
-
-        public sealed class AutoFiducialPointData
+        public bool TryGetAutoFiducialMachinePosition(
+            int index, out int fiducialId, out PointF machinePosition, out int fiducialCount)
         {
-            public int Id { get; set; }
-            public PointF TeachPosition { get; set; }
-            public PointF ActualPosition { get; set; }
-        }
+            SaveCurrentSurfaceToMemory();
+            fiducialId = -1;
+            machinePosition = PointF.Empty;
+            fiducialCount = fiducials == null ? 0 : fiducials.Count;
 
-        /// <summary>
-        /// Reads the detected Fiducial center in camera-image pixels from the last VisionMaster run.
-        /// This method does not trigger the camera or move the axes.
-        /// </summary>
-        public bool AutoTryGetFiducialVisionPixel(
-            int cameraIndex, int processIndex, out PointF imagePixel, out string error)
-        {
-            imagePixel = PointF.Empty;
-            error = "";
-
-            if (string.IsNullOrWhiteSpace(AutoFiducialXOutputName) ||
-                string.IsNullOrWhiteSpace(AutoFiducialYOutputName))
-            {
-                error = "Fiducial VisionMaster X/Y output names have not been configured.";
+            if (fiducials == null || index < 0 || index >= fiducials.Count)
                 return false;
-            }
 
-            if (_VisionSystem == null || cameraIndex < 0 || cameraIndex >= _VisionSystem.Length ||
-                _VisionSystem[cameraIndex] == null ||
-                _VisionSystem[cameraIndex].VisionProcesses == null ||
-                processIndex < 0 || processIndex >= _VisionSystem[cameraIndex].VisionProcesses.Length)
-            {
-                error = "Fiducial VisionMaster camera/process index is invalid.";
-                return false;
-            }
+            FiducialItem item = fiducials[index];
+            if (item == null) return false;
 
-            VisionMasterProcess process = _VisionSystem[cameraIndex].VisionProcesses[processIndex];
-            if (process == null)
-            {
-                error = "Fiducial VisionMaster process is not loaded.";
-                return false;
-            }
-
-            double x;
-            double y;
-            if (!process.TryGetNumericOutput(AutoFiducialXOutputName, out x))
-            {
-                error = "VisionMaster X output was not found or is not numeric: " + AutoFiducialXOutputName;
-                return false;
-            }
-            if (!process.TryGetNumericOutput(AutoFiducialYOutputName, out y))
-            {
-                error = "VisionMaster Y output was not found or is not numeric: " + AutoFiducialYOutputName;
-                return false;
-            }
-            if (x < 0 || y < 0 || x > float.MaxValue || y > float.MaxValue ||
-                process.LastInputWidth <= 0 || process.LastInputHeight <= 0 ||
-                x >= process.LastInputWidth || y >= process.LastInputHeight)
-            {
-                error = "VisionMaster Fiducial pixel coordinate is outside the last input image.";
-                return false;
-            }
-
-            imagePixel = new PointF((float)x, (float)y);
-            return true;
-        }
-
-        /// <summary>
-        /// Calculates translation-only X/Y offset from multiple matched Teach/Actual Fiducials.
-        /// Rotation is intentionally not calculated. maxAllowedResidual <= 0 disables the residual limit.
-        /// </summary>
-        public bool AutoCalculateFiducialOffsetXY(
-            IList<AutoFiducialPointData> points,
-            double maxAllowedResidual,
-            out PointF offset,
-            out double maxResidual,
-            out string error)
-        {
-            offset = PointF.Empty;
-            maxResidual = 0d;
-            error = "";
-
-            if (points == null || points.Count == 0)
-            {
-                error = "No Fiducial points were supplied.";
-                return false;
-            }
-            if (maxAllowedResidual < 0 || double.IsNaN(maxAllowedResidual) ||
-                double.IsInfinity(maxAllowedResidual))
-            {
-                error = "The maximum Fiducial residual limit is invalid.";
-                return false;
-            }
-
-            double sumX = 0d;
-            double sumY = 0d;
-            foreach (AutoFiducialPointData point in points)
-            {
-                if (point == null ||
-                    float.IsNaN(point.TeachPosition.X) || float.IsInfinity(point.TeachPosition.X) ||
-                    float.IsNaN(point.TeachPosition.Y) || float.IsInfinity(point.TeachPosition.Y) ||
-                    float.IsNaN(point.ActualPosition.X) || float.IsInfinity(point.ActualPosition.X) ||
-                    float.IsNaN(point.ActualPosition.Y) || float.IsInfinity(point.ActualPosition.Y))
-                {
-                    error = "A Fiducial Teach/Actual coordinate is invalid.";
-                    return false;
-                }
-
-                sumX += point.ActualPosition.X - point.TeachPosition.X;
-                sumY += point.ActualPosition.Y - point.TeachPosition.Y;
-            }
-
-            double offsetX = sumX / points.Count;
-            double offsetY = sumY / points.Count;
-            if (double.IsNaN(offsetX) || double.IsInfinity(offsetX) ||
-                double.IsNaN(offsetY) || double.IsInfinity(offsetY) ||
-                Math.Abs(offsetX) > float.MaxValue || Math.Abs(offsetY) > float.MaxValue)
-            {
-                error = "Calculated Fiducial offset is invalid.";
-                return false;
-            }
-
-            foreach (AutoFiducialPointData point in points)
-            {
-                double dx = (point.ActualPosition.X - point.TeachPosition.X) - offsetX;
-                double dy = (point.ActualPosition.Y - point.TeachPosition.Y) - offsetY;
-                double residual = Math.Sqrt(dx * dx + dy * dy);
-                if (residual > maxResidual) maxResidual = residual;
-            }
-
-            if (maxAllowedResidual > 0d && maxResidual > maxAllowedResidual)
-            {
-                error = "Fiducial residual exceeds the configured limit. Max residual: " +
-                    maxResidual.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
-                return false;
-            }
-
-            offset = new PointF((float)offsetX, (float)offsetY);
-            return true;
-        }
-
-        /// <summary>
-        /// Resolves the serial for one Marking List row. Product No is zero-based and
-        /// must be within the Array Count returned by MES. The original serial width is preserved.
-        /// </summary>
-        public bool AutoTryGetSerialNumber(
-            string mesStartSerial,
-            string productNo,
-            int arrayCount,
-            out string serialNumber,
-            out string error)
-        {
-            serialNumber = "";
-            error = "";
-
-            long startSerial;
-            int productIndex;
-            if (string.IsNullOrWhiteSpace(mesStartSerial) ||
-                !long.TryParse(mesStartSerial.Trim(), System.Globalization.NumberStyles.None,
-                    System.Globalization.CultureInfo.InvariantCulture, out startSerial))
-            {
-                error = "MES start Serial Number is empty or invalid.";
-                return false;
-            }
-            if (string.IsNullOrWhiteSpace(productNo) ||
-                !int.TryParse(productNo.Trim(), System.Globalization.NumberStyles.Integer,
-                    System.Globalization.CultureInfo.InvariantCulture, out productIndex))
-            {
-                error = "Marking List Product No is invalid: " + (productNo ?? "");
-                return false;
-            }
-            if (arrayCount <= 0 || productIndex < 0 || productIndex >= arrayCount)
-            {
-                error = "Product No is outside the MES Array Count range.";
-                return false;
-            }
-
-            try
-            {
-                long resolved = checked(startSerial + productIndex);
-                serialNumber = resolved.ToString(
-                    new string('0', Math.Max(1, mesStartSerial.Trim().Length)),
-                    System.Globalization.CultureInfo.InvariantCulture);
-                return true;
-            }
-            catch (OverflowException)
-            {
-                error = "Resolved Serial Number exceeds the supported numeric range.";
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// Applies translation-only X/Y offset to a Teach machine coordinate.
-        /// The original Marking List coordinate is not modified.
-        /// </summary>
-        public PointF AutoApplyFiducialOffsetXY(PointF teachPosition, PointF offset)
-        {
-            return new PointF(teachPosition.X + offset.X, teachPosition.Y + offset.Y);
-        }
-
-        /// <summary>Writes a Fiducial machine coordinate to the Fiducial PLC register pair only.</summary>
-        public bool AutoWriteFiducialCoordinates(PointF machinePosition)
-        {
-            int x, y;
-            if (!AutoTryConvertPlcCoordinate(machinePosition, out x, out y)) return false;
-            PLC.Write.WordIntegers[PlcDic.CheckFiducial_PosX] = x;
-            PLC.Write.WordIntegers[PlcDic.CheckFiducial_PosY] = y;
-            return true;
-        }
-
-        /// <summary>Writes a CODE inspection coordinate to the CODE PLC register pair only.</summary>
-        public bool AutoWriteCodeCoordinates(PointF machinePosition)
-        {
-            int x, y;
-            if (!AutoTryConvertPlcCoordinate(machinePosition, out x, out y)) return false;
-            PLC.Write.WordIntegers[PlcDic.CheckCode_PosX] = x;
-            PLC.Write.WordIntegers[PlcDic.CheckCode_PosY] = y;
-            return true;
-        }
-
-        /// <summary>Writes a Marking List coordinate to the Marking PLC register pair only.</summary>
-        public bool AutoWriteMarkingCoordinates(PointF machinePosition)
-        {
-            int x, y;
-            if (!AutoTryConvertPlcCoordinate(machinePosition, out x, out y)) return false;
-            PLC.Write.WordIntegers[PlcDic.MarkingPosX] = x;
-            PLC.Write.WordIntegers[PlcDic.MarkingPosY] = y;
-            return true;
-        }
-
-        private static bool AutoTryConvertPlcCoordinate(PointF position, out int x, out int y)
-        {
-            x = 0;
-            y = 0;
+            PointF position = GetFiducialCoordinates(item);
             if (float.IsNaN(position.X) || float.IsInfinity(position.X) ||
                 float.IsNaN(position.Y) || float.IsInfinity(position.Y))
                 return false;
-            try
-            {
-                x = checked((int)Math.Round(position.X, MidpointRounding.AwayFromZero));
-                y = checked((int)Math.Round(position.Y, MidpointRounding.AwayFromZero));
-                return true;
-            }
-            catch (OverflowException) { return false; }
-        }
 
-        // Auto Fiducial handshake:
-        // 0 = idle / wait PLC StartCheckFiducial rising edge
-        // 10 = camera trigger requested / wait VisionMaster completion
-        // 20 = wait PLC to release StartCheckFiducial
-        // 30 = all Fiducials complete / wait Require_CheckFiducial release
-        public int AutoFiducialVisionProcessIndex = 0;
-        public double AutoFiducialTimeoutSeconds = 5.0;
-        public PointF AutoFiducialOffset = PointF.Empty;
-        private int _autoFiducialState;
-        private bool _autoFiducialPreviousStart;
-        private bool _autoFiducialOwnsCamera;
-        private bool _autoFiducialFailed;
-        private int _autoFiducialIndex;
-        private int _autoFiducialCount;
-        private int _autoFiducialServoX;
-        private int _autoFiducialServoY;
-        private int _autoFiducialTeachId;
-        private int _autoFiducialPreviousVisionIndex;
-        private PointF _autoFiducialTeachMachine;
-        private DateTime _autoFiducialTriggerTime;
-        private readonly List<AutoFiducialPointData> _autoFiducialResults =
-            new List<AutoFiducialPointData>();
-
-        /// <summary>
-        /// Called immediately after ReadDataPLC1. A new Fiducial inspection starts only
-        /// on the rising edge of PLC StartCheckFiducial while Require_CheckFiducial is ON.
-        /// </summary>
-        public void AutoCheckFiducial()
-        {
-            if (IsTestNoPLC || MachineMode != ModeMachine.Auto ||
-                PLCDevice == null || PLCDevice[0] == null || !PLCDevice[0].IsConnected)
-            {
-                _autoFiducialState=0;
-                _autoFiducialPreviousStart = false;
-                return;
-            }    
-                
-
-            bool startSignal = PLC.Read.AutoBits[PlcDic.StartCheckFiducial];
-            bool startRising = startSignal && !_autoFiducialPreviousStart;
-            _autoFiducialPreviousStart = startSignal;
-
-            switch (_autoFiducialState)
-            {
-                case 0:
-                    if (!startRising || !PLC.Read.AutoBits[PlcDic.Require_CheckFiducial])
-                        return;
-                    AutoBeginFiducialCapture();
-                    break;
-
-                case 10:
-                    if (_VisionSystem == null || _VisionSystem.Length == 0 ||
-                        _VisionSystem[0] == null)
-                    {
-                        AutoFailFiducial("Camera 1 is not initialized.");
-                        return;
-                    }
-
-                    if (_VisionSystem[0].FinishTrigger)
-                        AutoCompleteFiducialCapture();
-                    else if ((DateTime.Now - _autoFiducialTriggerTime).TotalSeconds >=
-                             Math.Max(1.0, AutoFiducialTimeoutSeconds))
-                        AutoFailFiducial("Timed out waiting for Fiducial camera/VisionMaster result.");
-                    break;
-
-                case 20:
-                    if (!startSignal)
-                    {
-                        PLC.Write.AutoBits[PlcDic.CheckFiducialOneDone] = false;
-                        if (_autoFiducialFailed)
-                        {
-                            _autoFiducialIndex = 0;
-                            _autoFiducialResults.Clear();
-                            _autoFiducialFailed = false;
-                            _autoFiducialState = 0;
-                        }
-                        else if (_autoFiducialIndex >= _autoFiducialCount)
-                        {
-                            PointF offset;
-                            double maxResidual;
-                            string error;
-                            if (AutoCalculateFiducialOffsetXY(
-                                _autoFiducialResults, 0d, out offset, out maxResidual, out error))
-                            {
-                                AutoFiducialOffset = offset;
-                                PLC.Write.AutoBits[PlcDic.ResultFace_Corrrect] = true;
-                                PLC.Write.AutoBits[PlcDic.CheckFiducialALLDone] = true;
-                                WriteLogPC(LogType.Vision, "Auto Fiducial",
-                                    "All Fiducials passed. Offset X=" +
-                                    offset.X.ToString("0.###") + ", Y=" +
-                                    offset.Y.ToString("0.###") + ", Max residual=" +
-                                    maxResidual.ToString("0.###"));
-                                _autoFiducialState = 30;
-                            }
-                            else
-                            {
-                                AutoFailFiducial(error);
-                            }
-                        }
-                        else
-                        {
-                            _autoFiducialState = 0;
-                        }
-                    }
-                    break;
-
-                case 30:
-                    if (!PLC.Read.AutoBits[PlcDic.Require_CheckFiducial])
-                    {
-                        PLC.Write.AutoBits[PlcDic.CheckFiducialALLDone] = false;
-                        PLC.Write.AutoBits[PlcDic.ResultFace_Corrrect] = false;
-                        _autoFiducialIndex = 0;
-                        _autoFiducialCount = 0;
-                        _autoFiducialResults.Clear();
-                        // Keep the measured offset for the following Auto Marking cycle.
-                        _autoFiducialState = 0;
-                    }
-                    break;
-            }
-        }
-
-        private void AutoBeginFiducialCapture()
-        {
-            if (_VisionSystem == null || _VisionSystem.Length == 0 ||
-                _VisionSystem[0] == null || _VisionSystem[0].CAM == null ||
-                !_VisionSystem[0].CAM.IsOpen)
-            {
-                AutoFailFiducial("Camera 1 is not connected.");
-                return;
-            }
-            if (IsTestNoCam == null || IsTestNoCam.Length == 0 || IsTestNoCam[0])
-            {
-                AutoFailFiducial("Camera 1 is disabled in Test mode.");
-                return;
-            }
-            if (_VisionSystem[0].CAM.AcquisitionMode == CameraAcquisitionMode.Continuous)
-            {
-                AutoFailFiducial("Fiducial inspection requires the camera to be in software-trigger mode.");
-                return;
-            }
-            if (!_VisionSystem[0].IsVisionProcessInitial ||
-                _VisionSystem[0].VisionProcesses == null ||
-                AutoFiducialVisionProcessIndex < 0 ||
-                AutoFiducialVisionProcessIndex >= _VisionSystem[0].VisionProcesses.Length ||
-                _VisionSystem[0].VisionProcesses[AutoFiducialVisionProcessIndex] == null)
-            {
-                AutoFailFiducial("Fiducial VisionMaster process is not loaded. Check the configured process index.");
-                return;
-            }
-            if (ProcessIndex == null || ProcessIndex.Length == 0 || ProcessIndex[0] != 0 ||
-                PLC.Read.AutoBits[PlcDic.TriggerCam[0]])
-            {
-                AutoFailFiducial("Camera 1 is busy with another PLC trigger. Retry Fiducial after it is released.");
-                return;
-            }
-
-            int fiducialId;
-            PointF teachMachine;
-            int fiducialCount;
-            string layoutError;
-            if (!AutoReadFiducialTeachPoint(_autoFiducialIndex,
-                    out fiducialId, out teachMachine, out fiducialCount, out layoutError))
-            {
-                AutoFailFiducial(layoutError);
-                return;
-            }
-
-            if (_autoFiducialIndex == 0)
-            {
-                _autoFiducialCount = fiducialCount;
-                _autoFiducialResults.Clear();
-                AutoFiducialOffset = PointF.Empty;
-                PLC.Write.AutoBits[PlcDic.CheckFiducialALLDone] = false;
-                PLC.Write.AutoBits[PlcDic.ResultFace_Corrrect] = false;
-            }
-
-            _autoFiducialTeachId = fiducialId;
-            _autoFiducialTeachMachine = teachMachine;
-            _autoFiducialServoX = PLC.Read.WordIntegers[PlcDic.CurentPosX];
-            _autoFiducialServoY = PLC.Read.WordIntegers[PlcDic.CurentPosY];
-            _autoFiducialPreviousVisionIndex = _VisionSystem[0].TriggerIndex;
-            _VisionSystem[0].TriggerIndex = AutoFiducialVisionProcessIndex;
-            _VisionSystem[0].FinishTrigger = false;
-            _VisionSystem[0].ErrorGrap = false;
-            _VisionSystem[0].TriggerOne = true;
-            _autoFiducialTriggerTime = DateTime.Now;
-            _autoFiducialOwnsCamera = true;
-            _autoFiducialFailed = false;
-            PLC.Write.AutoBits[PlcDic.CheckFiducialOneDone] = false;
-            _autoFiducialState = 10;
-
-            WriteLogPC(LogType.Vision, "Auto Fiducial",
-                "Capture requested for Fiducial ID " + _autoFiducialTeachId +
-                " at servo X=" + _autoFiducialServoX + ", Y=" + _autoFiducialServoY);
-        }
-
-        private bool AutoReadFiducialTeachPoint(
-            int index, out int fiducialId, out PointF teachMachine,
-            out int fiducialCount, out string error)
-        {
-            fiducialId = -1;
-            teachMachine = PointF.Empty;
-            fiducialCount = 0;
-            error = "";
-
-            if (formModel == null || formModel.laserSettingLayout == null)
-            {
-                error = "Laser Setting Model is not initialized.";
-                return false;
-            }
-
-            try
-            {
-                int localId = -1;
-                int localCount = 0;
-                PointF localMachine = PointF.Empty;
-                Func<bool> read = () => formModel.laserSettingLayout.TryGetAutoFiducialMachinePosition(
-                    index, out localId, out localMachine, out localCount);
-
-                bool valid = InvokeRequired ? (bool)Invoke(read) : read();
-                fiducialId = localId;
-                fiducialCount = localCount;
-                teachMachine = localMachine;
-                if (!valid)
-                {
-                    error = fiducialCount == 0
-                        ? "No Fiducial points are configured on the active Model surface."
-                        : "Fiducial index " + index + " has no valid saved machine coordinate.";
-                }
-                return valid;
-            }
-            catch (Exception ex)
-            {
-                error = "Could not read Model Fiducial coordinates: " + ex.Message;
-                return false;
-            }
-        }
-
-        private void AutoCompleteFiducialCapture()
-        {
-            _autoFiducialOwnsCamera = false;
-            _VisionSystem[0].TriggerOne = false;
-            _VisionSystem[0].TriggerIndex = _autoFiducialPreviousVisionIndex;
-
-            VisionMasterProcess process =
-                _VisionSystem[0].VisionProcesses[AutoFiducialVisionProcessIndex];
-
-            if (_VisionSystem[0].ErrorGrap || _VisionSystem[0].ResultTriggerOne == 0)
-            {
-                AutoFailFiducial("VisionMaster inspection returned NG or camera acquisition failed.");
-                return;
-            }
-
-            PointF pixel;
-            string error;
-            if (!AutoTryGetFiducialVisionPixel(
-                0, AutoFiducialVisionProcessIndex, out pixel, out error))
-            {
-                AutoFailFiducial(error);
-                return;
-            }
-
-            PointF actualMachine = PointF.Empty;
-            PointF convertedMachine = PointF.Empty;
-            Func<bool> convert = () => formModel.laserSettingLayout.TryConvertAutoFramePixelToMachine(
-                _autoFiducialServoX, _autoFiducialServoY,
-                process.LastInputWidth, process.LastInputHeight,
-                pixel.X, pixel.Y, out convertedMachine);
-
-            bool converted;
-            try
-            {
-                converted = InvokeRequired ? (bool)Invoke(convert) : convert();
-                actualMachine = convertedMachine;
-            }
-            catch (Exception ex)
-            {
-                AutoFailFiducial("Pixel-to-machine conversion failed: " + ex.Message);
-                return;
-            }
-
-            if (!converted)
-            {
-                AutoFailFiducial("Could not convert Fiducial pixel coordinates using the active Model mm/px scale.");
-                return;
-            }
-
-            // This result belongs to Fiducial, so write only to the Fiducial PLC coordinate pair.
-            if (!AutoWriteFiducialCoordinates(actualMachine))
-            {
-                AutoFailFiducial("Measured Fiducial machine coordinate exceeds the PLC integer range.");
-                return;
-            }
-
-            _autoFiducialResults.Add(new AutoFiducialPointData
-            {
-                Id = _autoFiducialTeachId,
-                TeachPosition = _autoFiducialTeachMachine,
-                ActualPosition = actualMachine
-            });
-
-            PLC.Write.AutoBits[PlcDic.CheckFiducialOneDone] = true;
-            _autoFiducialIndex++;
-
-            WriteLogPC(LogType.Vision, "Auto Fiducial",
-                "Fiducial ID " + _autoFiducialTeachId +
-                " detected at pixel X=" + pixel.X.ToString("0.00") +
-                ", Y=" + pixel.Y.ToString("0.00") +
-                "; machine X=" + actualMachine.X.ToString("0.###") +
-                ", Y=" + actualMachine.Y.ToString("0.###"));
-
-            _autoFiducialState = 20;
-        }
-
-        private void AutoFailFiducial(string error)
-        {
-            _autoFiducialOwnsCamera = false;
-            _autoFiducialFailed = true;
-            if (_VisionSystem != null && _VisionSystem.Length > 0 && _VisionSystem[0] != null)
-            {
-                _VisionSystem[0].TriggerOne = false;
-                _VisionSystem[0].FinishTrigger = false;
-                _VisionSystem[0].TriggerIndex = _autoFiducialPreviousVisionIndex;
-            }
-
-            PLC.Write.AutoBits[PlcDic.CheckFiducialOneDone] = true;
-            PLC.Write.AutoBits[PlcDic.CheckFiducialALLDone] = false;
-            PLC.Write.AutoBits[PlcDic.ResultFace_Corrrect] = false;
-            _autoFiducialState = 20;
-            WriteLogPC(LogType.Vision, "Auto Fiducial NG",
-                string.IsNullOrWhiteSpace(error) ? "Unknown Fiducial inspection error." : error);
-        }
-
-
-        // Auto Marking process adapted from the reference machine sequence.
-        // Separate from ProcessIndex[] which is reserved for camera acquisition states.
-        public int AutoMarkingProcessIndex = 0;
-        public double AutoPrinterWaitTimeoutSeconds = 30.0;
-        private Task<DataInfomationSend> _autoMesRequestTask;
-        private DateTime _autoPrinterWaitStarted;
-        private int _autoMarkingCount;
-        private bool AutoMarkingMesReady;
-        private bool _autoMarkingErrorLogged;
-
-        private void AutoMarkingProcess()
-        {
-            if (IsTestNoPLC || MachineMode != ModeMachine.Auto ||
-                PLCDevice == null || PLCDevice[0] == null || !PLCDevice[0].IsConnected)
-                return;
-
-            bool start = PLC.Read.AutoBits[PlcDic.StartMarkingProcess];
-
-            // PLC abort/reset. Do not leave any command latched.
-            if (!start && AutoMarkingProcessIndex != 0 && AutoMarkingProcessIndex != 55)
-            {
-                AutoResetMarkingProcess("PLC released StartMarkingProcess.");
-                return;
-            }
-
-            switch (AutoMarkingProcessIndex)
-            {
-                case 0:
-                    if (!start) return;
-                    if (!AutoMarkingMesReady)
-                    {
-                        if (!AutoPrepareMesData()) return;
-                        AutoMarkingMesReady = true;
-                    }
-                    AutoMarkingProcessIndex = 5;
-                    break;
-
-                case 5:
-                    IndexPatternAuto = 0;
-                    RankIndex = 0;
-                    if (!AutoTryGetMarkingCount(out _autoMarkingCount))
-                    {
-                        AutoFailMarkingProcess("Could not read the Marking list from the active Model.");
-                        return;
-                    }
-                    if (_autoMarkingCount <= 0)
-                    {
-                        AutoFailMarkingProcess("The active Model has no Marking items.");
-                        return;
-                    }
-                    PLC.Write.AutoBits[PlcDic.Restart_Marking] = false;
-                    PLC.Write.AutoBits[PlcDic.WriteDataToPlcDone] = false;
-                    PLC.Write.AutoBits[PlcDic.MarkingStart] = false;
-                    PLC.Write.AutoBits[PlcDic.MarkingComplete] = false;
-                    AutoMarkingProcessIndex = 10;
-                    WriteLogPC(LogType.Main, "Auto Marking",
-                        "Cycle started. Marking count=" + _autoMarkingCount);
-                    break;
-
-                case 10:
-                    if (IndexPatternAuto >= _autoMarkingCount)
-                    {
-                        AutoMarkingProcessIndex = 30;
-                        break;
-                    }
-
-                    PointF teachPosition;
-                    string coordinateError;
-                    if (!AutoTryGetMarkingTeachPoint(IndexPatternAuto, out teachPosition, out coordinateError))
-                    {
-                        AutoFailMarkingProcess(coordinateError);
-                        return;
-                    }
-
-                    // Apply the translation calculated by the Fiducial process.
-                    PointF correctedPosition = AutoApplyFiducialOffsetXY(teachPosition, AutoFiducialOffset);
-                    if (!AutoWriteMarkingCoordinates(correctedPosition))
-                    {
-                        AutoFailMarkingProcess("Marking coordinate is outside the supported PLC integer range.");
-                        return;
-                    }
-
-                    // Printer_HandleDataReceived uses this index to select the same Marking item.
-                    PLC.Write.AutoBits[PlcDic.Restart_Marking] = false;
-                    PLC.Write.AutoBits[PlcDic.MarkingStart] = false;
-                    PLC.Write.AutoBits[PlcDic.MarkingComplete] = false;
-                    PLC.Write.AutoBits[PlcDic.WriteDataToPlcDone] = true;
-                    _autoPrinterWaitStarted = DateTime.Now;
-                    _autoMarkingErrorLogged = false;
-                    AutoMarkingProcessIndex = 15;
-
-                    WriteLogPC(LogType.Main, "Auto Marking",
-                        "Prepared Marking " + (IndexPatternAuto + 1) +
-                        "/" + _autoMarkingCount +
-                        " at X=" + correctedPosition.X.ToString("0.###") +
-                        ", Y=" + correctedPosition.Y.ToString("0.###"));
-                    break;
-
-                case 15:
-                    // The EzCard/Printer TCP service remains responsible for responding to
-                    // CODE/TEXT requests using IndexPatternAuto. Wait for its connection
-                    // before allowing the PLC to start the current marking item.
-                    if (!IsTestNoPrint && (Printerclient == null || !Printerclient.Connected))
-                    {
-                        if ((DateTime.Now - _autoPrinterWaitStarted).TotalSeconds >=
-                            Math.Max(1.0, AutoPrinterWaitTimeoutSeconds))
-                            AutoFailMarkingProcess("Timed out waiting for EzCard/Printer TCP connection.");
-                        return;
-                    }
-                    AutoMarkingProcessIndex = 16;
-                    break;
-
-                case 16:
-                    // Same handshake condition as the reference machine:
-                    // PLC has accepted the data, or has released MarkingOneDone.
-                    if (PLC.Read.AutoBits[PlcDic.MarkingStartConfirm] ||
-                        !PLC.Read.AutoBits[PlcDic.MarkingOneDone])
-                        AutoMarkingProcessIndex = 17;
-                    break;
-
-                case 17:
-                    PLC.Write.AutoBits[PlcDic.MarkingStart] = true;
-                    PLC.Write.AutoBits[PlcDic.WriteDataToPlcDone] = false;
-                    PLC.Write.AutoBits[PlcDic.Restart_Marking] = false;
-                    AutoMarkingProcessIndex = 20;
-                    break;
-
-                case 20:
-                    if (PLC.Read.AutoBits[PlcDic.MarkingOneDone])
-                    {
-                        PLC.Write.AutoBits[PlcDic.MarkingStart] = false;
-                        AutoMarkingProcessIndex = 21;
-                    }
-                    break;
-
-                case 21:
-                    if (!PLC.Read.AutoBits[PlcDic.MarkingOneDone])
-                    {
-                        IndexPatternAuto++;
-                        PLC.Write.AutoBits[PlcDic.Restart_Marking] = false;
-                        AutoMarkingProcessIndex = 25;
-                    }
-                    break;
-
-                case 25:
-                    AutoMarkingProcessIndex =
-                        IndexPatternAuto < _autoMarkingCount ? 10 : 30;
-                    break;
-
-                case 30:
-                    PLC.Write.AutoBits[PlcDic.MarkingStart] = false;
-                    PLC.Write.AutoBits[PlcDic.WriteDataToPlcDone] = false;
-                    PLC.Write.AutoBits[PlcDic.MarkingComplete] = true;
-                    AutoMarkingProcessIndex = 35;
-                    WriteLogPC(LogType.Main, "Auto Marking", "All Marking items completed.");
-                    break;
-
-                case 35:
-                    if (PLC.Read.AutoBits[PlcDic.MarkingCompleteConfirm])
-                    {
-                        PLC.Write.AutoBits[PlcDic.MarkingComplete] = false;
-                        AutoMarkingProcessIndex = 55;
-                    }
-                    break;
-
-                case 55:
-                    if (!start)
-                    {
-                        AutoResetMarkingProcess("Marking cycle completed and PLC released StartMarkingProcess.");
-                    }
-                    break;
-            }
-        }
-
-        /// <summary>
-        /// MES is requested asynchronously so the PLC communication loop is not blocked
-        /// by the MES TCP timeout. Existing Main.GetDataInfomationSerialno remains the
-        /// offline-mode implementation and UI presentation path.
-        /// </summary>
-        private bool AutoPrepareMesData()
-        {
-            bool mesEnabled = formOption != null && formOption.Parameters != null &&
-                              formOption.Parameters.MES.MesEnabel;
-
-            if (!mesEnabled)
-            {
-                try
-                {
-                    Func<bool> getOffline = () => formMain != null && formMain.GetDataInfomationSerialno();
-                    return InvokeRequired ? (bool)Invoke(getOffline) : getOffline();
-                }
-                catch (Exception ex)
-                {
-                    AutoFailMarkingProcess("Offline MES preparation failed: " + ex.Message);
-                    return false;
-                }
-            }
-
-            if (_autoMesRequestTask == null)
-            {
-                string lotNo = "";
-                try
-                {
-                    Func<string> readLot = () => formMain == null ? CurrentLotNo : formMain.txtLotNo.Text.Trim();
-                    lotNo = InvokeRequired ? (string)Invoke(readLot) : readLot();
-                }
-                catch (Exception ex)
-                {
-                    AutoFailMarkingProcess("Could not read Lot No from the Main screen: " + ex.Message);
-                    return false;
-                }
-
-                if (string.IsNullOrWhiteSpace(lotNo)) lotNo = CurrentLotNo;
-                if (string.IsNullOrWhiteSpace(lotNo))
-                {
-                    AutoFailMarkingProcess("Lot No is empty. Enter a Lot No before starting Auto.");
-                    return false;
-                }
-
-                CurrentLotNo = lotNo;
-                _autoMesRequestTask = Task.Run(() => MES.DataInformationRequest(lotNo));
-                return false;
-            }
-
-            if (!_autoMesRequestTask.IsCompleted) return false;
-
-            DataInfomationSend response = null;
-            try
-            {
-                response = _autoMesRequestTask.GetAwaiter().GetResult();
-            }
-            catch (Exception ex)
-            {
-                _autoMesRequestTask = null;
-                AutoFailMarkingProcess("MES request failed: " + ex.Message);
-                return false;
-            }
-            _autoMesRequestTask = null;
-
-            if (response == null || !string.IsNullOrEmpty(MES.ExceptionCode))
-            {
-                AutoFailMarkingProcess("MES did not return valid Lot information: " +
-                    (string.IsNullOrEmpty(MES.ExceptionCode) ? "Empty response." : MES.ExceptionCode));
-                return false;
-            }
-
-            MesDataInfomation = response;
-            RankIndex = 0;
-            try
-            {
-                Action updateUi = () =>
-                {
-                    formMain.txtYMMDDN.Text = response.YMMDDN ?? "";
-                    formMain.txtSerialNo.Text = response.SerialNo ?? "";
-                    formMain.txt1STbarcode.Text = response.Code ?? "";
-                    formMain.txtArrayCount.Text = response.Array.ToString();
-                    formMain.dgvRank.Rows.Clear();
-                    if (response.Rank != null)
-                    {
-                        foreach (string rank in response.Rank)
-                            formMain.dgvRank.Rows.Add(rank);
-                    }
-                    if (response.Rank != null && response.Rank.Length > 0)
-                        formMain.txtRank.Text = response.Rank[0] ?? "";
-                    if (response.Rank != null && response.Rank.Length > 1)
-                        formMain.txtRank2.Text = response.Rank[1] ?? "";
-                    formMain.txtMesResult.Text = "MES Online. Get data infomation OK.";
-                    formMain.txtMesResult.BackColor = Color.LawnGreen;
-                };
-                if (InvokeRequired) Invoke(updateUi); else updateUi();
-            }
-            catch (Exception ex)
-            {
-                AutoFailMarkingProcess("MES data was received but could not be applied to the Main screen: " + ex.Message);
-                return false;
-            }
-
-            WriteLogPC(LogType.Mes, "MES", "MES Lot information received for Lot " + lotNoSafe(response));
+            fiducialId = item.Id;
+            machinePosition = position;
             return true;
         }
 
-        private static string lotNoSafe(DataInfomationSend data)
+        /// <summary>
+        /// Converts a Fiducial pixel in the current camera frame into machine coordinates
+        /// using the active surface's ImagePixelToMM and servo-axis transform settings.
+        /// </summary>
+        /// <summary>Gets one Marking item's current machine coordinate on the active surface.</summary>
+        public bool TryGetAutoMarkingMachinePosition(int index, out PointF machinePosition)
         {
-            return data == null ? "" : (data.Code ?? "");
+            SaveCurrentSurfaceToMemory();
+            machinePosition = PointF.Empty;
+            if (index < 0 || index >= markings.Count) return false;
+            PointF value = GetMarkingCoordinates(markings[index]);
+            if (float.IsNaN(value.X) || float.IsInfinity(value.X) ||
+                float.IsNaN(value.Y) || float.IsInfinity(value.Y)) return false;
+            machinePosition = value;
+            return true;
         }
 
-        private bool AutoTryGetMarkingCount(out int count)
+        public bool TryConvertAutoFramePixelToMachine(
+            int servoX, int servoY, int imageWidth, int imageHeight,
+            double pixelX, double pixelY, out PointF machinePosition)
         {
-            count = 0;
-            if (formModel == null || formModel.laserSettingLayout == null) return false;
+            SaveCurrentSurfaceToMemory();
+            machinePosition = PointF.Empty;
+
+            if (imageWidth <= 0 || imageHeight <= 0 ||
+                double.IsNaN(pixelX) || double.IsInfinity(pixelX) ||
+                double.IsNaN(pixelY) || double.IsInfinity(pixelY))
+                return false;
+
+            double scale = CurrentParameters.ImagePixelToMM;
+            if (scale <= 0 || double.IsNaN(scale) || double.IsInfinity(scale))
+                return false;
+
+            LaserScanImageParameter framePosition = new LaserScanImageParameter
+            {
+                ServoX = servoX,
+                ServoY = servoY
+            };
+
+            machinePosition = GetServoImageMachinePoint(
+                CurrentParameters, framePosition, imageWidth, imageHeight,
+                scale, pixelX, pixelY);
+
+            return !float.IsNaN(machinePosition.X) && !float.IsInfinity(machinePosition.X) &&
+                   !float.IsNaN(machinePosition.Y) && !float.IsInfinity(machinePosition.Y);
+        }
+
+        public void SetModelFolderPath(string folderPath)
+        {
+            modelFolderPath = folderPath ?? "";
+            SaveCurrentSurfaceToMemory();
+            RefreshPictureGrid();
+        }
+
+        //Lấy ảnh
+        public void SwitchSurface(LaserSurface surface)
+        {
+            SaveCurrentSurfaceToMemory();
+            currentSurface = surface;
+            ListPicture.Text = surface == LaserSurface.Top ? "Picture - TOP" : "Picture - BOT";
+            RebuildSurfaceImage(surface);
+            btnTop.BackColor = surface == LaserSurface.Top ? Color.LightGreen : Color.WhiteSmoke;
+            btnBot.BackColor = surface == LaserSurface.Bot ? Color.LightGreen : Color.WhiteSmoke;
+            LoadSurfaceImage(surface == LaserSurface.Top ? topImageFileName : botImageFileName);
+            LoadCurrentSurfaceToControls();
+            FitImageClick(this, EventArgs.Empty);
+        }
+
+        private static string GetTopImageFile(CamPara camera)
+        {
+            if (!string.IsNullOrWhiteSpace(camera.LaserTopImageFile)) return camera.LaserTopImageFile;
+            return camera.LaserImageFile;
+        }
+
+        private void LoadSurfaceImage(string fileName)
+        {
+            if (!string.IsNullOrWhiteSpace(fileName) && System.IO.File.Exists(fileName))
+                LoadImage(fileName, false);
+            else
+            {
+                Image oldImage = markingImage.Image;
+                markingImage.Image = null;
+                if (oldImage != null) oldImage.Dispose();
+                FitImageClick(this, EventArgs.Empty);
+            }
+        }
+        //load&Save
+        public void SaveCurrentSurfaceToMemory()
+        {
+            if (dgvListPictureSub != null && dgvListPictureSub.IsCurrentCellInEditMode)
+                dgvListPictureSub.EndEdit();
+
+            if (currentSurface == LaserSurface.Top) topParameters = CaptureCurrentSurface();
+            else botParameters = CaptureCurrentSurface();
+        }
+
+        private LaserSurfaceParameter CaptureCurrentSurface()
+        {
+            LaserSurfaceParameter result = new LaserSurfaceParameter
+            {
+                //ResolutionImage = ParseResolution(resolutionValue.Text, 1f),
+                ImagePixelToMM = ParseResolution(imagePixelToMmValue.Text, 1f),
+                ResolutionImageRobot = ParseResolution(robotResolutionValue.Text, 1f),
+                EnableServoAxisTransform = enableAxisTransform != null && enableAxisTransform.Checked,
+                SwapServoAxes = swapServoAxes != null && swapServoAxes.Checked,
+                ReverseServoX = reverseServoX != null && reverseServoX.Checked,
+                ReverseServoY = reverseServoY != null && reverseServoY.Checked,
+                HasStitchCoordinateSystem = CurrentParameters.HasStitchCoordinateSystem,
+                StitchOriginX = CurrentParameters.StitchOriginX,
+                StitchOriginY = CurrentParameters.StitchOriginY,
+                StitchPixelToMM = CurrentParameters.StitchPixelToMM,
+                ImageLocalCoordinateVersion = 1
+            };
+            foreach (LaserScanImageParameter picture in CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
+                result.ScanImages.Add(new LaserScanImageParameter
+                {
+                    Id = picture.Id,
+                    ImagePath = picture.ImagePath,
+                    ServoX = picture.ServoX,
+                    ServoY = picture.ServoY,
+                    CaptureTime = picture.CaptureTime
+                });
+            foreach (MarkingItem item in markings)
+                result.Markings.Add(new LaserMarkingParameter { Id = item.Id, ImageId = item.ImageId ?? "", Product = item.Product, Type = item.Type, PrintType = item.PrintType, Content = item.Content, PositionX = string.IsNullOrEmpty(item.ImageId) ? item.Position.X : item.LocalPosition.X, PositionY = string.IsNullOrEmpty(item.ImageId) ? item.Position.Y : item.LocalPosition.Y, Rotate = item.Rotate });
+            foreach (FiducialItem point in fiducials)
+                result.Fiducials.Add(new LaserFiducialParameter { Id = point.Id, ImageId = point.ImageId ?? "", PositionX = string.IsNullOrEmpty(point.ImageId) ? point.Position.X : point.LocalPosition.X, PositionY = string.IsNullOrEmpty(point.ImageId) ? point.Position.Y : point.LocalPosition.Y });
+            return result;
+        }
+
+        private void LoadCurrentSurfaceToControls()
+        {
+            MigrateNormalizedImageLocalCoordinates();
+            loadingSurfaceControls = true;
+            DeleteAllMarkingClick(this, EventArgs.Empty);
+            DeleteAllFiducials();
+            //resolutionValue.Text = CurrentParameters.ResolutionImage.ToString("0.########");
+            imagePixelToMmValue.Text = CurrentParameters.ImagePixelToMM.ToString("0.########");
+            robotResolutionValue.Text = CurrentParameters.ResolutionImageRobot.ToString("0.########");
+            if (enableAxisTransform != null)
+            {
+                refreshingAxisControls = true;
+                enableAxisTransform.Checked = CurrentParameters.EnableServoAxisTransform;
+                swapServoAxes.Checked = CurrentParameters.SwapServoAxes;
+                reverseServoX.Checked = CurrentParameters.ReverseServoX;
+                reverseServoY.Checked = CurrentParameters.ReverseServoY;
+                swapServoAxes.Enabled = enableAxisTransform.Checked;
+                reverseServoX.Enabled = enableAxisTransform.Checked;
+                reverseServoY.Enabled = enableAxisTransform.Checked;
+                refreshingAxisControls = false;
+            }
+            foreach (LaserMarkingParameter marking in CurrentParameters.Markings ?? new List<LaserMarkingParameter>())
+            {
+                PointF storedPosition = new PointF((float)marking.PositionX, (float)marking.PositionY);
+                PointF displayPosition = string.IsNullOrWhiteSpace(marking.ImageId) ? storedPosition : SourceToCanvas(marking.ImageId, storedPosition);
+                AddMarking(marking.Type, displayPosition, marking.Id, marking.Product, marking.PrintType, marking.Content,
+                    marking.Rotate, marking.ImageId, storedPosition);
+            }
+            NormalizeMarkingOrder();
+            RebuildMarkingList();
+            foreach (LaserFiducialParameter point in CurrentParameters.Fiducials ?? new List<LaserFiducialParameter>())
+            {
+                PointF storedPosition = new PointF((float)point.PositionX, (float)point.PositionY);
+                PointF displayPosition = string.IsNullOrWhiteSpace(point.ImageId) ? storedPosition : SourceToCanvas(point.ImageId, storedPosition);
+                AddFiducial(displayPosition, point.Id, point.ImageId, storedPosition);
+            }
+            RefreshPictureGrid();
+            loadingSurfaceControls = false;
+        }
+
+        private void SaveOneClick(object sender, EventArgs e)
+        {
+            SaveCurrentSurfaceToMemory();
+            if (currentSurface == LaserSurface.Top) savedTopParameters = CloneSurface(topParameters);
+            else savedBotParameters = CloneSurface(botParameters);
+        }
+
+        private void SaveAllClick(object sender, EventArgs e)
+        {
+            SaveCurrentSurfaceToMemory();
+            savedTopParameters = CloneSurface(topParameters);
+            savedBotParameters = CloneSurface(botParameters);
+            SaveAllRequested?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void DiscardClick(object sender, EventArgs e)
+        {
+            if (currentSurface == LaserSurface.Top) topParameters = CloneSurface(savedTopParameters);
+            else botParameters = CloneSurface(savedBotParameters);
+            LoadCurrentSurfaceToControls();
+        }
+
+        private void ConfigureAxisTransformControls()
+        {
+            enableAxisTransform = new CheckBox
+            {
+                Name = "enableAxisTransform",
+                Text = "Enable",
+                AutoSize = true,
+                Location = new Point(5, 34),
+                BackColor = Color.Transparent
+            };
+            swapServoAxes = new CheckBox
+            {
+                Name = "swapServoAxes",
+                Text = "Swap X/Y",
+                AutoSize = true,
+                Location = new Point(72, 34),
+                BackColor = Color.Transparent
+            };
+            reverseServoX = new CheckBox
+            {
+                Name = "reverseServoX",
+                Text = "Flip X",
+                AutoSize = true,
+                Location = new Point(145, 34),
+                BackColor = Color.Transparent
+            };
+            reverseServoY = new CheckBox
+            {
+                Name = "reverseServoY",
+                Text = "Flip Y",
+                AutoSize = true,
+                Location = new Point(215, 34),
+                BackColor = Color.Transparent
+            };
+
+            panel7.Controls.Add(enableAxisTransform);
+            panel7.Controls.Add(swapServoAxes);
+            panel7.Controls.Add(reverseServoX);
+            panel7.Controls.Add(reverseServoY);
+
+            dgvListPictureSub.Location = new Point(5, 57);
+            dgvListPictureSub.Size = new Size(214, 103);
+            btnAddPicture.Location = new Point(227, 57);
+            btnDeletePic.Location = new Point(227, 91);
+            btnPicDeleteAll.Location = new Point(227, 125);
+
+            enableAxisTransform.CheckedChanged += AxisTransformChanged;
+            swapServoAxes.CheckedChanged += AxisTransformChanged;
+            reverseServoX.CheckedChanged += AxisTransformChanged;
+            reverseServoY.CheckedChanged += AxisTransformChanged;
+        }
+
+        private void AxisTransformChanged(object sender, EventArgs e)
+        {
+            if (refreshingAxisControls) return;
+            bool enabled = enableAxisTransform.Checked;
+            swapServoAxes.Enabled = enabled;
+            reverseServoX.Enabled = enabled;
+            reverseServoY.Enabled = enabled;
+            SaveCurrentSurfaceToMemory();
+            RebuildSurfaceImage(currentSurface);
+        }
+
+        private void ConfigurePictureGrid()
+        {
+            dgvListPictureSub.Columns.Clear();
+            dgvListPictureSub.AutoGenerateColumns = false;
+            dgvListPictureSub.AllowUserToAddRows = false;
+            dgvListPictureSub.AllowUserToDeleteRows = false;
+            dgvListPictureSub.ReadOnly = false;
+            dgvListPictureSub.MultiSelect = true;
+            dgvListPictureSub.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            dgvListPictureSub.RowHeadersVisible = false;
+            dgvListPictureSub.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
+            dgvListPictureSub.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colPicturePath", HeaderText = "Ảnh",
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, MinimumWidth = 80, ReadOnly = true
+            });
+            dgvListPictureSub.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colServoX", HeaderText = "Servo X (mm)", Width = 75, ReadOnly = false, ValueType = typeof(string)
+            });
+            dgvListPictureSub.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colServoY", HeaderText = "Servo Y (mm)", Width = 75, ReadOnly = false, ValueType = typeof(string)
+            });
+        }
+
+        public string ResolvePicturePath(LaserScanImageParameter picture)
+        {
+            if (picture == null || string.IsNullOrWhiteSpace(picture.ImagePath)) return "";
+            if (Path.IsPathRooted(picture.ImagePath)) return picture.ImagePath;
+            if (string.IsNullOrWhiteSpace(modelFolderPath)) return picture.ImagePath;
+            return Path.GetFullPath(Path.Combine(modelFolderPath, picture.ImagePath));
+        }
+
+        private void RefreshPictureGrid()
+        {
+            if (dgvListPictureSub == null) return;
+            refreshingPictureGrid = true;
             try
             {
-                Func<int> read = () =>
+                dgvListPictureSub.Rows.Clear();
+                foreach (LaserScanImageParameter picture in CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
                 {
-                    formModel.laserSettingLayout.SaveCurrentSurfaceToMemory();
-                    return formModel.laserSettingLayout.markings == null
-                        ? 0 : formModel.laserSettingLayout.markings.Count;
-                };
-                count = InvokeRequired ? (int)Invoke(read) : read();
+                    string fullPath = ResolvePicturePath(picture);
+                    int rowIndex = dgvListPictureSub.Rows.Add(
+                        fullPath,
+                        picture.ServoX.HasValue ? picture.ServoX.Value.ToString("0.###", CultureInfo.CurrentCulture) : "",
+                        picture.ServoY.HasValue ? picture.ServoY.Value.ToString("0.###", CultureInfo.CurrentCulture) : "");
+                    dgvListPictureSub.Rows[rowIndex].Tag = picture;
+                    dgvListPictureSub.Rows[rowIndex].Cells["colPicturePath"].ToolTipText = fullPath;
+                    if (!File.Exists(fullPath))
+                        dgvListPictureSub.Rows[rowIndex].DefaultCellStyle.ForeColor = Color.DarkRed;
+                }
+            }
+            finally
+            {
+                refreshingPictureGrid = false;
+            }
+        }
+
+        private void PictureGridCellDoubleClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.RowIndex >= dgvListPictureSub.Rows.Count) return;
+            LaserScanImageParameter picture = dgvListPictureSub.Rows[e.RowIndex].Tag as LaserScanImageParameter;
+            string path = ResolvePicturePath(picture);
+            if (!File.Exists(path)) return;
+
+            picturePreviewActive = true;
+            LoadImage(path, true, false); // Fit the temporary single-image preview without replacing the stitched path.
+        }
+
+        private void PictureGridMouseLeave(object sender, EventArgs e)
+        {
+            if (!picturePreviewActive) return;
+            picturePreviewActive = false;
+
+            string stitchedPath = currentSurface == LaserSurface.Top ? topImageFileName : botImageFileName;
+            if (File.Exists(stitchedPath))
+                LoadImage(stitchedPath, true, false);
+            else
+                RebuildSurfaceImage(currentSurface);
+        }
+
+        private void AddPicturesClick(object sender, EventArgs e)
+        {
+            using (OpenFileDialog dialog = new OpenFileDialog())
+            {
+                dialog.Title = "Add pictures to " + (currentSurface == LaserSurface.Top ? "TOP" : "BOT");
+                dialog.Filter = "Image files|*.bmp;*.jpg;*.jpeg;*.png;*.gif;*.tif;*.tiff|All files|*.*";
+                dialog.Multiselect = true;
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+                if (string.IsNullOrWhiteSpace(modelFolderPath))
+                {
+                    MessageBox.Show("Please call or save a Model before adding pictures.", "Add Pictures",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                string surfaceFolder = currentSurface == LaserSurface.Top ? "TOP" : "BOT";
+                string relativeFolder = Path.Combine("LaserPictures", surfaceFolder);
+                string targetFolder = Path.Combine(modelFolderPath, relativeFolder);
+                try
+                {
+                    Directory.CreateDirectory(targetFolder);
+                    foreach (string sourcePath in dialog.FileNames)
+                    {
+                        if (!File.Exists(sourcePath)) continue;
+                        string extension = Path.GetExtension(sourcePath);
+                        string fileName = Path.GetFileNameWithoutExtension(sourcePath) + "_" +
+                            Guid.NewGuid().ToString("N").Substring(0, 8) + extension;
+                        string destination = Path.Combine(targetFolder, fileName);
+                        File.Copy(sourcePath, destination, false);
+
+                        CurrentParameters.ScanImages.Add(new LaserScanImageParameter
+                        {
+                            Id = Guid.NewGuid().ToString("N"),
+                            ImagePath = Path.Combine(relativeFolder, fileName),
+                            ServoX = null,
+                            ServoY = null,
+                            CaptureTime = DateTime.Now
+                        });
+                    }
+
+                    SaveCurrentSurfaceToMemory();
+                    RefreshPictureGrid();
+                    RebuildSurfaceImage(currentSurface);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Could not add pictures: " + ex.Message, "Add Pictures",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
+        private void DeleteSelectedPicturesClick(object sender, EventArgs e)
+        {
+            if (dgvListPictureSub.SelectedRows.Count == 0) return;
+            List<LaserScanImageParameter> selected = new List<LaserScanImageParameter>();
+            foreach (DataGridViewRow row in dgvListPictureSub.SelectedRows)
+            {
+                LaserScanImageParameter picture = row.Tag as LaserScanImageParameter;
+                if (picture != null && !selected.Contains(picture)) selected.Add(picture);
+            }
+            RemovePictures(selected);
+        }
+
+        private void DeleteAllPicturesClick(object sender, EventArgs e)
+        {
+            if (CurrentParameters.ScanImages == null || CurrentParameters.ScanImages.Count == 0) return;
+            DialogResult answer = MessageBox.Show(
+                "Delete all pictures from the " + (currentSurface == LaserSurface.Top ? "TOP" : "BOT") + " list?",
+                "Delete All Pictures", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (answer != DialogResult.Yes) return;
+            RemovePictures(new List<LaserScanImageParameter>(CurrentParameters.ScanImages));
+        }
+
+        private void RemovePictures(List<LaserScanImageParameter> pictures)
+        {
+            if (pictures == null || pictures.Count == 0) return;
+            HashSet<string> removedImageIds = new HashSet<string>(
+                pictures.Where(p => !string.IsNullOrWhiteSpace(p.Id)).Select(p => p.Id),
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (LaserScanImageParameter picture in pictures)
+            {
+                CurrentParameters.ScanImages.Remove(picture);
+                DeleteModelPictureFile(picture);
+            }
+
+            foreach (MarkingItem item in markings.Where(x => removedImageIds.Contains(x.ImageId ?? "")).ToList())
+            {
+                if (item.View != null) imageViewport.Controls.Remove(item.View);
+                markings.Remove(item);
+                selectedMarkings.Remove(item);
+                if (selectedMarking == item) selectedMarking = null;
+            }
+            foreach (FiducialItem item in fiducials.Where(x => removedImageIds.Contains(x.ImageId ?? "")).ToList())
+            {
+                if (item.View != null) markingImage.Controls.Remove(item.View);
+                fiducials.Remove(item);
+            }
+            RebuildMarkingList();
+            RefreshFiducialRows();
+
+            SaveCurrentSurfaceToMemory();
+            RefreshPictureGrid();
+            RebuildSurfaceImage(currentSurface, CurrentParameters.ScanImages.Count == 0);
+        }
+
+        private void DeleteModelPictureFile(LaserScanImageParameter picture)
+        {
+            try
+            {
+                string path = ResolvePicturePath(picture);
+                if (string.IsNullOrWhiteSpace(modelFolderPath) || !File.Exists(path)) return;
+
+                string modelRoot = Path.GetFullPath(modelFolderPath).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                string fullPath = Path.GetFullPath(path);
+                string allowedRoot = Path.GetFullPath(Path.Combine(modelFolderPath, "LaserPictures")).
+                    TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
+                if (fullPath.StartsWith(allowedRoot, StringComparison.OrdinalIgnoreCase) &&
+                    fullPath.StartsWith(modelRoot, StringComparison.OrdinalIgnoreCase))
+                    File.Delete(fullPath);
+            }
+            catch
+            {
+                // Removing a list entry must not fail just because an old image file is locked.
+            }
+        }
+
+        private void PictureGridCellValueChanged(object sender, DataGridViewCellEventArgs e)
+        {
+            ApplyPictureGridCoordinateEdit(e);
+        }
+
+        private void PictureGridCellEndEdit(object sender, DataGridViewCellEventArgs e)
+        {
+            // CellEndEdit is the reliable finalization point for TextBox cells.
+            // CellValueChanged may already have handled the edit; the update method
+            // compares both coordinates and skips duplicate rebuilds.
+            ApplyPictureGridCoordinateEdit(e);
+        }
+
+        private bool TryParseOptionalServoCoordinate(object value, out double? coordinate)
+        {
+            coordinate = null;
+            string raw = Convert.ToString(value);
+            if (string.IsNullOrWhiteSpace(raw)) return true;
+
+            double parsed;
+            bool valid = double.TryParse(raw.Trim(), NumberStyles.Float,
+                CultureInfo.CurrentCulture, out parsed) ||
+                double.TryParse(raw.Trim(), NumberStyles.Float,
+                CultureInfo.InvariantCulture, out parsed);
+
+            if (!valid || double.IsNaN(parsed) || double.IsInfinity(parsed))
+                return false;
+
+            coordinate = parsed;
+            return true;
+        }
+
+        private bool SameServoCoordinate(double? left, double? right)
+        {
+            if (!left.HasValue || !right.HasValue)
+                return left.HasValue == right.HasValue;
+            return Math.Abs(left.Value - right.Value) < 0.0000001;
+        }
+
+        private void ApplyPictureGridCoordinateEdit(DataGridViewCellEventArgs e)
+        {
+            if (refreshingPictureGrid || updatingPictureCoordinates ||
+                e.RowIndex < 0 || e.ColumnIndex < 0 ||
+                e.RowIndex >= dgvListPictureSub.Rows.Count)
+                return;
+
+            string columnName = dgvListPictureSub.Columns[e.ColumnIndex].Name;
+            if (columnName != "colServoX" && columnName != "colServoY")
+                return;
+
+            DataGridViewRow row = dgvListPictureSub.Rows[e.RowIndex];
+            LaserScanImageParameter rowPicture = row.Tag as LaserScanImageParameter;
+            if (rowPicture == null) return;
+
+            updatingPictureCoordinates = true;
+            try
+            {
+                // Resolve against the active Model collection instead of trusting a
+                // potentially stale DataGridView Tag after a previous snapshot/rebind.
+                List<LaserScanImageParameter> pictures = CurrentParameters.ScanImages;
+                LaserScanImageParameter picture = null;
+                if (!string.IsNullOrWhiteSpace(rowPicture.Id))
+                    picture = pictures.FirstOrDefault(x => x.Id == rowPicture.Id);
+
+                if (picture == null && e.RowIndex < pictures.Count)
+                    picture = pictures[e.RowIndex];
+
+                if (picture == null) return;
+
+                double? servoX;
+                double? servoY;
+                if (!TryParseOptionalServoCoordinate(row.Cells["colServoX"].Value, out servoX) ||
+                    !TryParseOptionalServoCoordinate(row.Cells["colServoY"].Value, out servoY))
+                {
+                    MessageBox.Show("Please enter valid Servo X/Y coordinates in millimetres, or leave a cell blank.",
+                        "Invalid Coordinate", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    RefreshPictureGrid();
+                    return;
+                }
+
+                bool changed = !SameServoCoordinate(picture.ServoX, servoX) ||
+                               !SameServoCoordinate(picture.ServoY, servoY);
+                if (!changed)
+                {
+                    // Keep the row bound to the current Model object even when this was
+                    // the second notification for the same edit.
+                    row.Tag = picture;
+                    return;
+                }
+
+                picture.ServoX = servoX;
+                picture.ServoY = servoY;
+
+                // Capture the changed picture coordinates into the active TOP/BOT
+                // parameter snapshot, then rebuild using that new snapshot.
+                if (currentSurface == LaserSurface.Top)
+                    topParameters = CaptureCurrentSurface();
+                else
+                    botParameters = CaptureCurrentSurface();
+
+                RebindPictureGridTags();
+                RebuildSurfaceImage(currentSurface);
+            }
+            finally
+            {
+                updatingPictureCoordinates = false;
+            }
+        }
+
+        private void RebindPictureGridTags()
+        {
+            List<LaserScanImageParameter> pictures = CurrentParameters.ScanImages ??
+                new List<LaserScanImageParameter>();
+            int count = Math.Min(dgvListPictureSub.Rows.Count, pictures.Count);
+            for (int i = 0; i < count; i++)
+            {
+                dgvListPictureSub.Rows[i].Tag = pictures[i];
+                dgvListPictureSub.Rows[i].Cells["colPicturePath"].ToolTipText =
+                    ResolvePicturePath(pictures[i]);
+            }
+        }
+
+        private bool TryMapLegacyContactSheetPoint(PointF oldCanvasPoint, out string imageId, out PointF sourcePoint)
+        {
+            imageId = "";
+            sourcePoint = PointF.Empty;
+            const int oldThumbWidth = 320;
+            const int oldThumbHeight = 240;
+            const int oldCellWidth = 344;
+            const int oldCellHeight = 288;
+            int columns = Math.Min(3, imageTiles.Count);
+
+            for (int i = 0; i < imageTiles.Count; i++)
+            {
+                ImageTileInfo tile = imageTiles[i];
+                double scale = Math.Min(oldThumbWidth / (double)tile.SourceWidth, oldThumbHeight / (double)tile.SourceHeight);
+                int drawWidth = Math.Max(1, (int)Math.Round(tile.SourceWidth * scale));
+                int drawHeight = Math.Max(1, (int)Math.Round(tile.SourceHeight * scale));
+                int cellX = 12 + (i % columns) * oldCellWidth;
+                int cellY = 12 + (i / columns) * oldCellHeight;
+                int drawX = cellX + (oldCellWidth - drawWidth) / 2;
+                int drawY = cellY + 4 + (oldThumbHeight - drawHeight) / 2;
+                RectangleF oldBounds = new RectangleF(drawX, drawY, drawWidth, drawHeight);
+                if (!oldBounds.Contains(oldCanvasPoint)) continue;
+
+                imageId = tile.ImageId;
+                sourcePoint = new PointF(
+                    (float)((oldCanvasPoint.X - drawX) / scale),
+                    (float)((oldCanvasPoint.Y - drawY) / scale));
                 return true;
             }
-            catch (Exception ex)
+
+            return false;
+        }
+
+        public void MigrateLegacyPointsToImageTiles(bool hadLegacyStitch, double originX, double originY, double oldMmPerPixel)
+        {
+            if (imageTiles.Count == 0) return;
+            double mmPerPixel = Math.Max(0.0000001, CurrentParameters.ImagePixelToMM);
+
+            Func<PointF, Tuple<string, PointF>> findSourcePoint = oldPixel =>
             {
-                WriteLogPC(LogType.Main, "Auto Marking", ex.Message);
-                return false;
+                double machineX;
+                double machineY;
+                if (hadLegacyStitch && oldMmPerPixel > 0)
+                {
+                    machineX = originX + oldPixel.X * oldMmPerPixel;
+                    machineY = originY - oldPixel.Y * oldMmPerPixel;
+                }
+                else
+                {
+                    string legacyImageId;
+                    PointF legacyLocal;
+                    if (TryMapLegacyContactSheetPoint(oldPixel, out legacyImageId, out legacyLocal))
+                        return Tuple.Create(legacyImageId, legacyLocal);
+                    if (imageTiles.Count == 1)
+                        return Tuple.Create(imageTiles[0].ImageId, oldPixel);
+                    return null; // Legacy multi-image data without a known tile is ambiguous.
+                }
+
+                ImageTileInfo bestTile = null;
+                PointF bestLocal = PointF.Empty;
+                double bestDistance = double.MaxValue;
+                foreach (ImageTileInfo tile in imageTiles)
+                {
+                    LaserScanImageParameter picture = (CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
+                        .FirstOrDefault(x => string.Equals(x.Id, tile.ImageId, StringComparison.OrdinalIgnoreCase));
+                    if (picture == null || !picture.ServoX.HasValue || !picture.ServoY.HasValue) continue;
+
+                    PointF center = TransformServoAxes(picture.ServoX.Value, picture.ServoY.Value);
+                    PointF offset = InverseTransformServoAxes(machineX - center.X, machineY - center.Y);
+                    PointF local = new PointF(
+                        (float)(tile.SourceWidth / 2.0 + offset.X / mmPerPixel),
+                        (float)(tile.SourceHeight / 2.0 - offset.Y / mmPerPixel));
+                    if (local.X < 0 || local.Y < 0 || local.X > tile.SourceWidth || local.Y > tile.SourceHeight) continue;
+
+                    double distance = offset.X * offset.X + offset.Y * offset.Y;
+                    if (distance < bestDistance)
+                    {
+                        bestDistance = distance;
+                        bestTile = tile;
+                        bestLocal = local;
+                    }
+                }
+
+                if (bestTile == null && imageTiles.Count == 1)
+                    return Tuple.Create(imageTiles[0].ImageId, oldPixel);
+                return bestTile == null ? null : Tuple.Create(bestTile.ImageId, bestLocal);
+            };
+
+            bool migratedAny = false;
+            foreach (LaserMarkingParameter marking in CurrentParameters.Markings ?? new List<LaserMarkingParameter>())
+            {
+                if (!string.IsNullOrWhiteSpace(marking.ImageId)) continue;
+                Tuple<string, PointF> migrated = findSourcePoint(new PointF((float)marking.PositionX, (float)marking.PositionY));
+                if (migrated == null) continue;
+                marking.ImageId = migrated.Item1;
+                marking.PositionX = migrated.Item2.X;
+                marking.PositionY = migrated.Item2.Y;
+                migratedAny = true;
+            }
+
+            foreach (LaserFiducialParameter point in CurrentParameters.Fiducials ?? new List<LaserFiducialParameter>())
+            {
+                if (!string.IsNullOrWhiteSpace(point.ImageId)) continue;
+                Tuple<string, PointF> migrated = findSourcePoint(new PointF((float)point.PositionX, (float)point.PositionY));
+                if (migrated == null) continue;
+                point.ImageId = migrated.Item1;
+                point.PositionX = migrated.Item2.X;
+                point.PositionY = migrated.Item2.Y;
+                migratedAny = true;
+            }
+
+            foreach (MarkingItem item in markings.Where(x => string.IsNullOrWhiteSpace(x.ImageId)))
+            {
+                Tuple<string, PointF> migrated = findSourcePoint(item.Position);
+                if (migrated == null) continue;
+                item.ImageId = migrated.Item1;
+                item.LocalPosition = migrated.Item2;
+                item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+                migratedAny = true;
+            }
+
+            foreach (FiducialItem item in fiducials.Where(x => string.IsNullOrWhiteSpace(x.ImageId)))
+            {
+                Tuple<string, PointF> migrated = findSourcePoint(item.Position);
+                if (migrated == null) continue;
+                item.ImageId = migrated.Item1;
+                item.LocalPosition = migrated.Item2;
+                item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+                migratedAny = true;
+            }
+
+            if (migratedAny)
+            {
+                if (currentSurface == LaserSurface.Top) savedTopParameters = CloneSurface(topParameters);
+                else savedBotParameters = CloneSurface(botParameters);
             }
         }
 
-        private bool AutoTryGetMarkingTeachPoint(int index, out PointF position, out string error)
+        private void MigrateNormalizedImageLocalCoordinates()
         {
-            position = PointF.Empty;
-            error = "";
-            if (formModel == null || formModel.laserSettingLayout == null)
+            if (CurrentParameters.ImageLocalCoordinateVersion >= 1)
+                return;
+
+            bool changed = false;
+            bool allReferencedTilesAvailable = true;
+            foreach (LaserMarkingParameter marking in CurrentParameters.Markings ?? new List<LaserMarkingParameter>())
             {
-                error = "Laser Setting Model is not initialized.";
-                return false;
+                if (string.IsNullOrWhiteSpace(marking.ImageId)) continue;
+                ImageTileInfo tile = FindImageTile(marking.ImageId);
+                if (tile == null)
+                {
+                    allReferencedTilesAvailable = false;
+                    continue;
+                }
+
+                // The buggy mapping inverted full-image edge vectors, so saved local points
+                // from that build are normalized fractions instead of source pixels.
+                if (Math.Abs(marking.PositionX) <= 1.001 && Math.Abs(marking.PositionY) <= 1.001)
+                {
+                    marking.PositionX *= tile.SourceWidth;
+                    marking.PositionY *= tile.SourceHeight;
+                    changed = true;
+                }
             }
 
+            foreach (LaserFiducialParameter point in CurrentParameters.Fiducials ?? new List<LaserFiducialParameter>())
+            {
+                if (string.IsNullOrWhiteSpace(point.ImageId)) continue;
+                ImageTileInfo tile = FindImageTile(point.ImageId);
+                if (tile == null)
+                {
+                    allReferencedTilesAvailable = false;
+                    continue;
+                }
+
+                if (Math.Abs(point.PositionX) <= 1.001 && Math.Abs(point.PositionY) <= 1.001)
+                {
+                    point.PositionX *= tile.SourceWidth;
+                    point.PositionY *= tile.SourceHeight;
+                    changed = true;
+                }
+            }
+
+            if (allReferencedTilesAvailable)
+                CurrentParameters.ImageLocalCoordinateVersion = 1;
+            if (changed)
+            {
+                if (currentSurface == LaserSurface.Top) topParameters = CurrentParameters;
+                else botParameters = CurrentParameters;
+            }
+        }
+
+        private void RepositionImageBoundItems()
+        {
+            foreach (MarkingItem item in markings)
+                if (!string.IsNullOrWhiteSpace(item.ImageId) && FindImageTile(item.ImageId) != null)
+                    item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+
+            foreach (FiducialItem item in fiducials)
+                if (!string.IsNullOrWhiteSpace(item.ImageId) && FindImageTile(item.ImageId) != null)
+                    item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+
+            UpdateAllMarkingViews();
+            UpdateAllFiducialViews();
+        }
+
+        public void RebuildSurfaceImage(LaserSurface surface, bool clearWhenNoPictures = false)
+        {
+            LaserSurfaceParameter parameters = surface == LaserSurface.Top ? topParameters : botParameters;
+            bool hadLegacyStitch = parameters.HasStitchCoordinateSystem && parameters.StitchPixelToMM > 0;
+            double legacyOriginX = parameters.StitchOriginX;
+            double legacyOriginY = parameters.StitchOriginY;
+            double legacyPixelToMM = parameters.StitchPixelToMM;
+            if (surface == currentSurface) imageTiles.Clear();
+
+            parameters.HasStitchCoordinateSystem = false;
+            parameters.StitchPixelToMM = 0;
+
+            List<Tuple<LaserScanImageParameter, Bitmap>> loaded =
+                new List<Tuple<LaserScanImageParameter, Bitmap>>();
             try
             {
-                PointF local = PointF.Empty;
-                Func<bool> read = () => formModel.laserSettingLayout.TryGetAutoMarkingMachinePosition(index, out local);
-                bool valid = InvokeRequired ? (bool)Invoke(read) : read();
-                position = local;
-                if (!valid) error = "Could not read machine coordinates for Marking index " + index + ".";
-                return valid;
+                foreach (LaserScanImageParameter picture in parameters.ScanImages ?? new List<LaserScanImageParameter>())
+                {
+                    string path = ResolvePicturePath(picture);
+                    if (!File.Exists(path)) continue;
+                    try
+                    {
+                        using (Image source = Image.FromFile(path))
+                            loaded.Add(Tuple.Create(picture, new Bitmap(source)));
+                    }
+                    catch { }
+                }
+
+                string outputPath = "";
+                if (loaded.Count == 0)
+                {
+                    if (!clearWhenNoPictures && (parameters.ScanImages == null || parameters.ScanImages.Count == 0))
+                        outputPath = surface == LaserSurface.Top ? topImageFileName : botImageFileName;
+                }
+                else
+                {
+                    double mmPerPixel = parameters.ImagePixelToMM;
+                    if (double.IsNaN(mmPerPixel) || double.IsInfinity(mmPerPixel) || mmPerPixel <= 0)
+                        mmPerPixel = 0.02;
+
+                    // Only images with a known capture position can participate in a coordinate-based stitch.
+                    List<Tuple<LaserScanImageParameter, Bitmap>> positioned = loaded
+                        .Where(x => x.Item1.ServoX.HasValue && x.Item1.ServoY.HasValue)
+                        .ToList();
+
+                    if (positioned.Count > 0 && !string.IsNullOrWhiteSpace(modelFolderPath))
+                    {
+                        double minX = double.MaxValue;
+                        double maxX = double.MinValue;
+                        double minY = double.MaxValue;
+                        double maxY = double.MinValue;
+
+                        foreach (Tuple<LaserScanImageParameter, Bitmap> entry in positioned)
+                        {
+                            LaserScanImageParameter picture = entry.Item1;
+                            Bitmap image = entry.Item2;
+                            PointF[] corners =
+                            {
+                                GetServoImageMachinePoint(parameters, picture, image.Width, image.Height, mmPerPixel, 0, 0),
+                                GetServoImageMachinePoint(parameters, picture, image.Width, image.Height, mmPerPixel, image.Width, 0),
+                                GetServoImageMachinePoint(parameters, picture, image.Width, image.Height, mmPerPixel, 0, image.Height),
+                                GetServoImageMachinePoint(parameters, picture, image.Width, image.Height, mmPerPixel, image.Width, image.Height)
+                            };
+
+                            foreach (PointF corner in corners)
+                            {
+                                minX = Math.Min(minX, corner.X);
+                                maxX = Math.Max(maxX, corner.X);
+                                minY = Math.Min(minY, corner.Y);
+                                maxY = Math.Max(maxY, corner.Y);
+                            }
+                        }
+
+                        const float margin = 20f;
+                        double physicalWidth = Math.Max(0.001, maxX - minX);
+                        double physicalHeight = Math.Max(0.001, maxY - minY);
+                        double rawWidth = physicalWidth / mmPerPixel;
+                        double rawHeight = physicalHeight / mmPerPixel;
+
+                        // Preserve the physical layout while downsampling only the preview when the
+                        // servo span would otherwise create an impractically large bitmap.
+                        double renderScale = Math.Min(1.0, Math.Min(28000.0 / rawWidth, 28000.0 / rawHeight));
+                        double maxAreaScale = Math.Sqrt(100000000.0 / Math.Max(1.0, rawWidth * rawHeight));
+                        renderScale = Math.Min(renderScale, maxAreaScale);
+                        double pixelsPerMM = renderScale / mmPerPixel;
+                        double canvasWidthValue = Math.Ceiling(physicalWidth * pixelsPerMM + margin * 2);
+                        double canvasHeightValue = Math.Ceiling(physicalHeight * pixelsPerMM + margin * 2);
+                        int canvasWidth = Math.Max(1, (int)canvasWidthValue);
+                        int canvasHeight = Math.Max(1, (int)canvasHeightValue);
+                        List<ImageTileInfo> newTiles = new List<ImageTileInfo>();
+
+                        using (Bitmap canvas = new Bitmap(canvasWidth, canvasHeight, PixelFormat.Format24bppRgb))
+                        using (Graphics graphics = Graphics.FromImage(canvas))
+                        using (Pen tilePen = new Pen(Color.FromArgb(90, 130, 150), 1f))
+                        {
+                            graphics.Clear(Color.Black);
+                            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                            graphics.SmoothingMode = SmoothingMode.HighQuality;
+
+                            foreach (Tuple<LaserScanImageParameter, Bitmap> entry in positioned)
+                            {
+                                LaserScanImageParameter picture = entry.Item1;
+                                Bitmap image = entry.Item2;
+                                if (string.IsNullOrWhiteSpace(picture.Id))
+                                    picture.Id = Guid.NewGuid().ToString("N");
+
+                                PointF topLeftMachine = GetServoImageMachinePoint(
+                                    parameters, picture, image.Width, image.Height, mmPerPixel, 0, 0);
+                                PointF topRightMachine = GetServoImageMachinePoint(
+                                    parameters, picture, image.Width, image.Height, mmPerPixel, image.Width, 0);
+                                PointF bottomLeftMachine = GetServoImageMachinePoint(
+                                    parameters, picture, image.Width, image.Height, mmPerPixel, 0, image.Height);
+                                PointF bottomRightMachine = GetServoImageMachinePoint(
+                                    parameters, picture, image.Width, image.Height, mmPerPixel, image.Width, image.Height);
+
+                                PointF p00 = MachineToStitchPixel(topLeftMachine.X, topLeftMachine.Y, minX, maxY, pixelsPerMM, margin);
+                                PointF p10 = MachineToStitchPixel(topRightMachine.X, topRightMachine.Y, minX, maxY, pixelsPerMM, margin);
+                                PointF p01 = MachineToStitchPixel(bottomLeftMachine.X, bottomLeftMachine.Y, minX, maxY, pixelsPerMM, margin);
+                                PointF p11 = MachineToStitchPixel(bottomRightMachine.X, bottomRightMachine.Y, minX, maxY, pixelsPerMM, margin);
+
+                                PointF[] destination = { p00, p10, p01 };
+                                graphics.DrawImage(image, destination);
+                                graphics.DrawPolygon(tilePen, new[] { p00, p10, p11, p01 });
+
+                                float left = Math.Min(Math.Min(p00.X, p10.X), Math.Min(p01.X, p11.X));
+                                float top = Math.Min(Math.Min(p00.Y, p10.Y), Math.Min(p01.Y, p11.Y));
+                                float right = Math.Max(Math.Max(p00.X, p10.X), Math.Max(p01.X, p11.X));
+                                float bottom = Math.Max(Math.Max(p00.Y, p10.Y), Math.Max(p01.Y, p11.Y));
+
+                                newTiles.Add(new ImageTileInfo
+                                {
+                                    ImageId = picture.Id,
+                                    DisplayBounds = RectangleF.FromLTRB(left, top, right, bottom),
+                                    SourceWidth = image.Width,
+                                    SourceHeight = image.Height,
+                                    CanvasOrigin = p00,
+                                    // Store the canvas displacement of ONE source pixel, not the full image edge.
+                                    // CanvasToSource then returns real source-image pixel coordinates.
+                                    CanvasXAxis = new PointF((p10.X - p00.X) / image.Width, (p10.Y - p00.Y) / image.Width),
+                                    CanvasYAxis = new PointF((p01.X - p00.X) / image.Height, (p01.Y - p00.Y) / image.Height),
+                                    Scale = 1f
+                                });
+                            }
+
+                            string surfaceFolder = surface == LaserSurface.Top ? "TOP" : "BOT";
+                            string targetFolder = Path.Combine(modelFolderPath, "LaserPictures", surfaceFolder);
+                            Directory.CreateDirectory(targetFolder);
+                            outputPath = Path.Combine(targetFolder, "Stitched_" + surfaceFolder + ".png");
+                            string temp = outputPath + "." + Guid.NewGuid().ToString("N") + ".tmp.png";
+                            canvas.Save(temp, ImageFormat.Png);
+                            if (File.Exists(outputPath)) File.Delete(outputPath);
+                            File.Move(temp, outputPath);
+                        }
+
+                        parameters.HasStitchCoordinateSystem = true;
+                        // The stitched bitmap includes a visual margin around the machine-coordinate bounds.
+                        // Shift the stored origin so canvas pixel (0,0) still maps to the correct machine point.
+                        parameters.StitchOriginX = minX - margin / pixelsPerMM;
+                        parameters.StitchOriginY = maxY + margin / pixelsPerMM;
+                        parameters.StitchPixelToMM = 1.0 / pixelsPerMM;
+
+                        if (surface == currentSurface)
+                        {
+                            imageTiles.Clear();
+                            imageTiles.AddRange(newTiles);
+                            MigrateLegacyPointsToImageTiles(hadLegacyStitch, legacyOriginX, legacyOriginY, legacyPixelToMM);
+                        }
+                    }
+                    else if (positioned.Count == 0)
+                    {
+                        // Keep the images visible in a contact sheet until their Servo X/Y values are entered.
+                        string surfaceFolder = surface == LaserSurface.Top ? "TOP" : "BOT";
+                        string targetFolder = Path.Combine(modelFolderPath, "LaserPictures", surfaceFolder);
+                        if (!string.IsNullOrWhiteSpace(modelFolderPath))
+                        {
+                            Directory.CreateDirectory(targetFolder);
+                            const int thumbWidth = 480;
+                            const int thumbHeight = 360;
+                            int columns = Math.Min(3, loaded.Count);
+                            int rows = (int)Math.Ceiling(loaded.Count / (double)columns);
+                            int cellWidth = thumbWidth + 32;
+                            int cellHeight = thumbHeight + 58;
+                            using (Bitmap canvas = new Bitmap(columns * cellWidth + 24, rows * cellHeight + 24))
+                            using (Graphics graphics = Graphics.FromImage(canvas))
+                            using (Font font = new Font("Segoe UI", 9f))
+                            using (Brush brush = new SolidBrush(Color.White))
+                            {
+                                graphics.Clear(Color.FromArgb(32, 32, 32));
+                                graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                                for (int i = 0; i < loaded.Count; i++)
+                                {
+                                    Bitmap image = loaded[i].Item2;
+                                    LaserScanImageParameter picture = loaded[i].Item1;
+                                    if (string.IsNullOrWhiteSpace(picture.Id))
+                                        picture.Id = Guid.NewGuid().ToString("N");
+                                    int col = i % columns;
+                                    int row = i / columns;
+                                    int x = 12 + col * cellWidth;
+                                    int y = 12 + row * cellHeight;
+                                    double factor = Math.Min(thumbWidth / (double)image.Width, thumbHeight / (double)image.Height);
+                                    int width = Math.Max(1, (int)Math.Round(image.Width * factor));
+                                    int height = Math.Max(1, (int)Math.Round(image.Height * factor));
+                                    int drawX = x + (cellWidth - width) / 2;
+                                    int drawY = y + 4 + (thumbHeight - height) / 2;
+                                    graphics.DrawImage(image, new Rectangle(drawX, drawY, width, height));
+                                    graphics.DrawString(Path.GetFileName(picture.ImagePath) + "   (Servo X/Y not set)",
+                                        font, brush, x + 6, y + thumbHeight + 12);
+                                }
+                                outputPath = Path.Combine(targetFolder, "Preview_" + surfaceFolder + ".png");
+                                string temp = outputPath + "." + Guid.NewGuid().ToString("N") + ".tmp.png";
+                                canvas.Save(temp, ImageFormat.Png);
+                                if (File.Exists(outputPath)) File.Delete(outputPath);
+                                File.Move(temp, outputPath);
+                            }
+                        }
+                    }
+                    else if (!string.IsNullOrWhiteSpace(modelFolderPath))
+                    {
+                        // Some images have positions and others do not: only positioned images are stitched.
+                        // The unpositioned images remain available in the picture grid.
+                    }
+                }
+
+                if (surface == LaserSurface.Top) topImageFileName = outputPath;
+                else botImageFileName = outputPath;
+
+                if (currentSurface == surface)
+                {
+                    LoadSurfaceImage(outputPath);
+                    RepositionImageBoundItems();
+                    RefreshMarkingRows();
+                    RefreshFiducialRows();
+                    UpdatePositionControls(selectedMarking);
+                    UpdateAllMarkingViews();
+                }
             }
             catch (Exception ex)
             {
-                error = "Could not read Marking coordinates: " + ex.Message;
+                if (currentSurface == surface)
+                    MessageBox.Show("Could not rebuild the " + (surface == LaserSurface.Top ? "TOP" : "BOT") +
+                        " image: " + ex.Message, "Image Stitching", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally
+            {
+                foreach (var item in loaded) item.Item2.Dispose();
+            }
+        }
+
+
+        public void ScanImageClick(object sender, EventArgs e)
+        {
+            StartScanImage(null);
+        }
+
+        /// <summary>
+        /// Uses the same capture/save pipeline as the manual Scan button.
+        /// The completion callback fires after the image and model parameters are saved.
+        /// </summary>
+        public bool ScanImageAuto(Action<bool, string> completed)
+        {
+            return StartScanImage(completed);
+        }
+
+        private bool StartScanImage(Action<bool, string> completed)
+        {
+            if (string.IsNullOrWhiteSpace(modelFolderPath) || !Directory.Exists(modelFolderPath))
+            {
+                CompleteScanFailure(completed, "Please save or call a Model before scanning images.");
                 return false;
             }
-        }
 
-        private void AutoFailMarkingProcess(string message)
-        {
-            PLC.Write.AutoBits[PlcDic.WriteDataToPlcDone] = false;
-            PLC.Write.AutoBits[PlcDic.MarkingStart] = false;
-            PLC.Write.AutoBits[PlcDic.Restart_Marking] = false;
-            PLC.Write.AutoBits[PlcDic.MarkingComplete] = false;
-            if (!_autoMarkingErrorLogged)
+            Action<Action<Bitmap, int, int>> requestHandler = ScanImageRequested;
+            if (requestHandler == null)
             {
-                WriteLogPC(LogType.Main, "Auto Marking NG", message);
-                _autoMarkingErrorLogged = true;
+                CompleteScanFailure(completed, "Camera scan is not connected to Form1.");
+                return false;
             }
-            // Hold at idle until PLC drops StartMarkingProcess; no false completion is sent.
-            AutoMarkingProcessIndex = 0;
-            _autoMesRequestTask = null;
-            AutoMarkingMesReady = false;
+
+            LaserSurface surfaceAtRequest = currentSurface;
+            string folderAtRequest = modelFolderPath;
+            Action<Bitmap, int, int> onCaptured = (capturedImage, servoX, servoY) =>
+            {
+                if (capturedImage == null)
+                {
+                    CompleteScanFailure(completed, "Camera did not return an image. Check camera connection and acquisition.");
+                    return;
+                }
+
+                SaveScannedImage(capturedImage, servoX, servoY, surfaceAtRequest, folderAtRequest, completed);
+            };
+
+            requestHandler(onCaptured);
+            return true;
         }
 
-        private void AutoResetMarkingProcess(string reason)
+        private void CompleteScanFailure(Action<bool, string> completed, string message)
         {
-            PLC.Write.AutoBits[PlcDic.WriteDataToPlcDone] = false;
-            PLC.Write.AutoBits[PlcDic.MarkingStart] = false;
-            PLC.Write.AutoBits[PlcDic.Restart_Marking] = false;
-            PLC.Write.AutoBits[PlcDic.MarkingComplete] = false;
-            AutoMarkingProcessIndex = 0;
-            IndexPatternAuto = 0;
-            _autoMarkingCount = 0;
-            _autoMesRequestTask = null;
-            _autoMesRequestStarted = false;
-            AutoMarkingMesReady = false;
-            AutoFiducialOffset = PointF.Empty;
-            WriteLogPC(LogType.Main, "Auto Marking", reason);
+            if (completed != null)
+            {
+                completed(false, message);
+                return;
+            }
+
+            Action showMessage = () =>
+                MessageBox.Show(message, "Scan Image", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+
+            if (IsDisposed) return;
+            if (InvokeRequired && IsHandleCreated) BeginInvoke(showMessage);
+            else if (!InvokeRequired) showMessage();
         }
 
-
-        #endregion AUTO LASER MARKING - SHARED CORE
-
-        #region Variables
-        //Các biến test máy
-        public static bool IsTestNoPLC = true;
-        public static bool[] IsTestNoCam = new bool[4];
-        public static bool IsTestNoPrint = true;
-        public static bool IsTestNoScanner = false;
-        public static bool IsTestNoMes = true;
-        private string filePath;
-        // Các form
-        public Main formMain;
-        public Model formModel;
-        public FormIO formIO;
-        public FormOption formOption;
-        public Login FormLogin;
-        bool Language = false;
-        private static Color OKColor = Color.FromArgb(57, 196, 129);
-        private static Color NGColor = Color.FromArgb(255, 130, 130);
-        //Các thiết bị
-        //PLC
-        public PLCCommunication PLC = new PLCCommunication();
-        private IPlc[] PLCDevice = new IPlc[2];
-
-        public static int threadSleepTime = 5;
-        private static int NumberWritePLC = 2;
-        private static int NumberWriteWPLC = 30;//Max == 123
-        private static ushort[] DataWritePLC;
-        private static ushort[] DataWriteWPLC;
-        private static ushort[] DataArray2;
-        private Stopwatch StopwatchReadPLC = new Stopwatch();
-        private Stopwatch StopwatchWritePLC = new Stopwatch();
-
-        //SCanner
-        public SerialPort Matrix220 = new SerialPort();
-        private string TimeReadPLC;
-        private string TimeWritePLC;
-        private bool interval = false;
-        public string CurrentLotNo = "";
-
-        public enum LogType
+        private void SaveScannedImage(
+            Bitmap capturedImage, int servoX, int servoY,
+            LaserSurface surface, string modelFolder,
+            Action<bool, string> completed)
         {
-            Main,
-            Mes,
-            PLC,
-            Vision
+            if (capturedImage == null)
+            {
+                CompleteScanFailure(completed, "Captured image is empty.");
+                return;
+            }
+
+            string fullPath = "";
+            try
+            {
+                string surfaceFolder = surface == LaserSurface.Top ? "TOP" : "BOT";
+                string relativeFolder = Path.Combine("LaserPictures", surfaceFolder);
+                string targetFolder = Path.Combine(modelFolder, relativeFolder);
+                Directory.CreateDirectory(targetFolder);
+
+                string fileName = "Scan_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + "_" + Guid.NewGuid().ToString("N").Substring(0, 5) + ".jpg";
+                fullPath = Path.Combine(targetFolder, fileName);
+                capturedImage.Save(fullPath, ImageFormat.Jpeg);
+
+                LaserScanImageParameter picture = new LaserScanImageParameter
+                {
+                    ImagePath = Path.Combine(relativeFolder, fileName),
+                    ServoX = servoX,
+                    ServoY = servoY,
+                    CaptureTime = DateTime.Now
+                };
+
+                Action updateUi = () =>
+                {
+                    try
+                    {
+                        LaserSurfaceParameter targetParameters = surface == LaserSurface.Top ? topParameters : botParameters;
+                        if (targetParameters.ScanImages == null) targetParameters.ScanImages = new List<LaserScanImageParameter>();
+                        targetParameters.ScanImages.Add(picture);
+
+                        if (currentSurface == surface)
+                        {
+                            LoadImage(fullPath);
+                            RefreshPictureGrid();
+                        }
+
+                        SaveCurrentSurfaceToMemoryIfSelected(surface);
+                        SaveOneSnapshotForSurface(surface);
+                        completed?.Invoke(true, "");
+                    }
+                    catch (Exception ex)
+                    {
+                        if (completed != null) completed(false, "Image saved but model UI update failed: " + ex.Message);
+                        else
+                            MessageBox.Show("Could not update scanned image: " + ex.Message, "Scan Image", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                };
+
+                if (IsDisposed || !IsHandleCreated)
+                {
+                    completed?.Invoke(false, "Laser Setting form is closed before the scan could finish.");
+                    return;
+                }
+
+                if (InvokeRequired) BeginInvoke(updateUi);
+                else updateUi();
+            }
+            catch (Exception ex)
+            {
+                if (completed != null) completed(false, "Could not save scanned image: " + ex.Message);
+                else
+                {
+                    Action showMessage = () =>
+                        MessageBox.Show("Could not save scanned image: " + ex.Message, "Scan Image", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    if (!IsDisposed && IsHandleCreated)
+                    {
+                        if (InvokeRequired) BeginInvoke(showMessage);
+                        else showMessage();
+                    }
+                }
+            }
+            finally
+            {
+                capturedImage.Dispose();
+            }
         }
 
-        //Các biến khác
-        private Thread trd;
-        private Thread threadCam1;
-        private readonly object _visionRuntimeSync = new object();
-        private volatile bool _shutdownRequested = false;
-        private bool _closingConfirmed = false;
-        public WordConvert _WordConvert = new WordConvert();
-        public int IndexFormShowing = 0;
-        //Sản Lượng
-        //Camera
-        public int NumberOfCamera = 1;
-        public int[] ProcessIndex = new int[3];
-        public string ProcessStepName = "";
-        int ProcessIndex2;
-        public string ProcessStepName2 = "";
-        public bool IsDualProduct = false;
-        public class TrayCellData
+        private void SaveCurrentSurfaceToMemoryIfSelected(LaserSurface surface)
         {
-            public bool? ResultA { get; set; }
-            public bool? ResultB { get; set; }
+            if (currentSurface == surface)
+            {
+                SaveCurrentSurfaceToMemory();
+                RebindPictureGridTags();
+            }
         }
 
-        public enum ResultVision
+        private void SaveOneSnapshotForSurface(LaserSurface surface)
         {
-            Wait,
-            Error,
-            NG,
-            OK
+            if (surface == LaserSurface.Top) savedTopParameters = CloneSurface(topParameters);
+            else savedBotParameters = CloneSurface(botParameters);
         }
-        public class ImageInfo
+
+        private void LoadImageClick(object sender, EventArgs e)
         {
-            public Bitmap Image { get; set; }
-            public Coordinate Coordinate { get; set; }
+            using (OpenFileDialog dialog = new OpenFileDialog())
+            {
+                dialog.Title = "Load Marking Image";
+                dialog.Filter = "Image files|*.bmp;*.jpg;*.jpeg;*.png;*.gif;*.tif;*.tiff|All files|*.*";
+                dialog.Multiselect = false;
+                if (dialog.ShowDialog(this) == DialogResult.OK)
+                    LoadImage(dialog.FileName);
+            }
         }
-        public VisionSystem[] _VisionSystem = new VisionSystem[3];
-        public int ModelNoInternal = 999;
-        //AutoMode
-        public enum ModeMachine
+
+        private void ToolMouseDown(object sender, MouseEventArgs e)
         {
-            Manual,
-            Teaching,
-            Auto
+            if (e.Button == MouseButtons.Left)
+                ((Button)sender).DoDragDrop(((Button)sender).Text, DragDropEffects.Copy);
         }
-        private List<Panel> PanelCamStatus = new List<Panel>();
-        public ModeMachine MachineMode = ModeMachine.Manual;
-        private int CountCheckPLC_On = 0;
-        public bool[] IsCamRunContinous = { false, false, false, false };
-        public bool[] IsLiveCam = { false, false, false, false };
-        public int[] CamJigNo;
-        public int[] CamPartNo;
-        //Giao diện
-        private int[] ErrorListCount = new int[2];
-        private bool[] IsReadErrorList = new bool[2];
-        private string[,] ErrorListContent1 = new string[2, 300];
-        private string[,] ErrorListContent2 = new string[2, 300];
-        public int[] CurrentErrorWord1 = new int[14];
-        public int[] CurrentErrorWord2 = new int[14];
-        Color TabControlBackColorON = Color.FromArgb(128, 128, 255);
-        Color TabControlBackColorOFF = Color.FromArgb(45, 45, 55);
-        private int CountStartThread = 0;
-        private int CountIntervalTimer1 = 0;
-        #endregion Variables
+
+        private void MarkingImageDragEnter(object sender, DragEventArgs e)
+        {
+            e.Effect = e.Data.GetDataPresent(typeof(string)) ? DragDropEffects.Copy : DragDropEffects.None;
+        }
+
+        private void MarkingImageDragDrop(object sender, DragEventArgs e)
+        {
+            string type = e.Data.GetData(typeof(string)) as string;
+            if (string.IsNullOrWhiteSpace(type)) return;
+
+            Point clientPoint = imageViewport.PointToClient(new Point(e.X, e.Y));
+            PointF imagePoint;
+            string imageId;
+            PointF localPoint;
+            if (!TryGetImageTilePoint(clientPoint, out imagePoint, out imageId, out localPoint)) return;
+            string Rotate = GetMarkingRotation(type).ToString().Replace("f", "");
+            AddMarking(type, imagePoint, Rotate, imageId, localPoint);
+        }
+
+        private bool TryGetImagePoint(Point viewportPoint, out PointF imagePoint)
+        {
+            string imageId;
+            PointF localPoint;
+            return TryGetImageTilePoint(viewportPoint, out imagePoint, out imageId, out localPoint);
+        }
+
+        private bool TryGetImageTilePoint(Point viewportPoint, out PointF canvasPoint, out string imageId, out PointF localPoint)
+        {
+            canvasPoint = PointF.Empty;
+            imageId = "";
+            localPoint = PointF.Empty;
+            if (markingImage.Image == null || markingImage.Width <= 0 || markingImage.Height <= 0) return false;
+
+            Point point = markingImage.PointToClient(imageViewport.PointToScreen(viewportPoint));
+            if (point.X < 0 || point.Y < 0 || point.X > markingImage.Width || point.Y > markingImage.Height) return false;
+            canvasPoint = new PointF(point.X / imageZoom, point.Y / imageZoom);
+
+            PointF lookupPoint = canvasPoint;
+            ImageTileInfo tile = imageTiles.LastOrDefault(x => x.DisplayBounds.Contains(lookupPoint));
+            if (tile == null) return false;
+
+            PointF candidate = CanvasToSource(tile.ImageId, canvasPoint);
+            if (candidate.X < 0 || candidate.Y < 0 ||
+                candidate.X > tile.SourceWidth || candidate.Y > tile.SourceHeight)
+                return false;
+
+            imageId = tile.ImageId;
+            localPoint = candidate;
+            return true;
+        }
+
+        private bool TryFindTileAtCanvasPoint(PointF canvasPoint, out ImageTileInfo destination, out PointF localPoint)
+        {
+            destination = null;
+            localPoint = PointF.Empty;
+
+            // Iterate backwards because later tiles are painted on top of earlier ones.
+            for (int i = imageTiles.Count - 1; i >= 0; i--)
+            {
+                ImageTileInfo tile = imageTiles[i];
+                if (!tile.DisplayBounds.Contains(canvasPoint))
+                    continue;
+
+                PointF candidate = CanvasToSource(tile.ImageId, canvasPoint);
+                if (candidate.X < 0 || candidate.Y < 0 ||
+                    candidate.X > tile.SourceWidth || candidate.Y > tile.SourceHeight)
+                    continue;
+
+                destination = tile;
+                localPoint = candidate;
+                return true;
+            }
+
+            return false;
+        }
+
+        private void UpdateMarkingImageBinding(MarkingItem item)
+        {
+            if (item == null) return;
+
+            ImageTileInfo destination;
+            PointF local;
+            if (TryFindTileAtCanvasPoint(item.Position, out destination, out local))
+            {
+                item.ImageId = destination.ImageId;
+                item.LocalPosition = local;
+            }
+            else
+            {
+                // A point in the gap between tiles belongs to the stitched canvas itself.
+                // GetMarkingCoordinates(item.Position) converts it through the stitch origin.
+                item.ImageId = "";
+                item.LocalPosition = item.Position;
+            }
+        }
+
+        private void UpdateFiducialImageBinding(FiducialItem item)
+        {
+            if (item == null) return;
+
+            ImageTileInfo destination;
+            PointF local;
+            if (TryFindTileAtCanvasPoint(item.Position, out destination, out local))
+            {
+                item.ImageId = destination.ImageId;
+                item.LocalPosition = local;
+            }
+            else
+            {
+                item.ImageId = "";
+                item.LocalPosition = item.Position;
+            }
+        }
+
+        private ImageTileInfo FindImageTile(string imageId)
+        {
+            if (string.IsNullOrWhiteSpace(imageId)) return null;
+            return imageTiles.FirstOrDefault(x => string.Equals(x.ImageId, imageId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private PointF SourceToCanvas(string imageId, PointF sourcePoint)
+        {
+            ImageTileInfo tile = FindImageTile(imageId);
+            if (tile == null) return sourcePoint;
+            return new PointF(
+                tile.CanvasOrigin.X + sourcePoint.X * tile.CanvasXAxis.X + sourcePoint.Y * tile.CanvasYAxis.X,
+                tile.CanvasOrigin.Y + sourcePoint.X * tile.CanvasXAxis.Y + sourcePoint.Y * tile.CanvasYAxis.Y);
+        }
+
+        private PointF CanvasToSource(string imageId, PointF canvasPoint)
+        {
+            ImageTileInfo tile = FindImageTile(imageId);
+            if (tile == null) return canvasPoint;
+
+            double dx = canvasPoint.X - tile.CanvasOrigin.X;
+            double dy = canvasPoint.Y - tile.CanvasOrigin.Y;
+            double determinant = tile.CanvasXAxis.X * tile.CanvasYAxis.Y -
+                                 tile.CanvasYAxis.X * tile.CanvasXAxis.Y;
+            if (Math.Abs(determinant) < 0.0000001) return PointF.Empty;
+
+            double sourceX = (dx * tile.CanvasYAxis.Y - dy * tile.CanvasYAxis.X) / determinant;
+            double sourceY = (tile.CanvasXAxis.X * dy - tile.CanvasXAxis.Y * dx) / determinant;
+            return new PointF((float)sourceX, (float)sourceY);
+        }
+        //Thêm Label laser
+
+        private void AddMarking(string type, PointF position, string Rotate, string imageId, PointF localPosition)
+        {
+            string normalizedType = NormalizeMarkingType(type);
+            AddMarking(normalizedType, position, nextMarkingId++, "0", normalizedType, "", Rotate, imageId, localPosition);
+        }
+
+        private void AddMarking(string type, PointF position, int id, string product, string printType, string content, string Rotate)
+        {
+            AddMarking(type, position, id, product, printType, content, Rotate, "", position);
+        }
+
+        private void AddMarking(string type, PointF position, int id, string product, string printType, string content, string Rotate, string imageId, PointF localPosition)
+        {
+            type = NormalizeMarkingType(type);
+            printType = NormalizeMarkingType(string.IsNullOrWhiteSpace(printType) ? type : printType);
+            MarkingItem item = new MarkingItem
+            {
+                Id = id,
+                ImageId = imageId ?? "",
+                LocalPosition = localPosition,
+                Position = string.IsNullOrWhiteSpace(imageId) ? position : SourceToCanvas(imageId, localPosition),
+                Product = product ?? "0",
+                Type = type,
+                PrintType = printType,
+                Content = content ?? "",
+                Rotate = Rotate
+            };
+            nextMarkingId = Math.Max(nextMarkingId, id + 1);
+            markings.Add(item);
+            PointF machinePosition = GetMarkingCoordinates(item);
+            int row = markingList.Rows.Add(GetMarkingNumber(item), item.Product, item.Type,
+                FormatCoordinate(machinePosition.X), FormatCoordinate(machinePosition.Y));
+            markingList.Rows[row].Tag = item;
+            CreateMarkingView(item);
+            SelectMarking(item);
+        }
+
+        private void CreateMarkingView(MarkingItem item)
+        {
+            Label view = item.Type == "CODE"
+                ? (Label)new QrMarkingLabel()
+                : new DirectionalMarkingLabel();
+            item.View = view;
+            item.View.AutoSize = false;
+           
+            item.View.Font = new Font("Times New Roman", MarkingFontSize, FontStyle.Regular);
+            item.View.Text = string.IsNullOrWhiteSpace(item.Content) ? item.Type : item.Content;
+            item.View.TextAlign = ContentAlignment.MiddleLeft;
+            item.View.ForeColor = Color.White;
+            item.View.BackColor = Color.Violet;
+            item.View.BorderStyle = BorderStyle.None;
+            item.View.Tag = item;
+            item.View.Cursor = Cursors.Hand;
+            item.View.ContextMenuStrip = markingImage.ContextMenuStrip;
+            if (item.View is DirectionalMarkingLabel directionalView)
+            {
+                directionalView.Rotation = GetMarkingRotation(item.Type);
+            }
+            UpdateQrImage(item);
+            item.View.MouseDown += MarkingViewMouseDown;
+            item.View.MouseWheel += MarkingImageMouseWheel;
+            item.View.MouseDown += PanMouseDown;
+            item.View.MouseMove += PanMouseMove;
+            item.View.MouseUp += PanMouseUp;
+            imageViewport.Controls.Add(item.View);
+            item.View.BringToFront();
+            UpdateMarkingView(item);
+        }
+
+        private void PanMouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left && e.Button != MouseButtons.Middle) return;
+            if (e.Button == MouseButtons.Left && !panMode) return;
+
+            panning = true;
+            panStart = Control.MousePosition;
+
+            // Always capture on the viewport, never on a moving child control.
+            // This keeps mouse-move events stable even when the pointer starts on a label.
+            imageViewport.Capture = true;
+            imageViewport.Cursor = Cursors.SizeAll;
+            markingImage.Cursor = Cursors.SizeAll;
+        }
+
+        private void PanMouseMove(object sender, MouseEventArgs e)
+        {
+            bool leftPan = panMode && (Control.MouseButtons & MouseButtons.Left) == MouseButtons.Left;
+            bool middlePan = (Control.MouseButtons & MouseButtons.Middle) == MouseButtons.Middle;
+            if (!panning || (!leftPan && !middlePan)) return;
+
+            Point current = Control.MousePosition;
+            int deltaX = current.X - panStart.X;
+            int deltaY = current.Y - panStart.Y;
+            if (deltaX == 0 && deltaY == 0) return;
+
+            imagePan = new Point(imagePan.X + deltaX, imagePan.Y + deltaY);
+            UpdateImagePanOnly();
+            panStart = current;
+        }
+
+        private void PanMouseUp(object sender, MouseEventArgs e)
+        {
+            if (!panning || (e.Button != MouseButtons.Left && e.Button != MouseButtons.Middle)) return;
+            panning = false;
+            imageViewport.Capture = false;
+            imageViewport.Cursor = panMode ? Cursors.Hand : Cursors.Default;
+            markingImage.Cursor = panMode ? Cursors.Hand : Cursors.Default;
+        }
+
+        private void MarkingViewMouseDown(object sender, MouseEventArgs e)
+        {
+            if (panMode) return;
+            MarkingItem item = ((Control)sender).Tag as MarkingItem;
+            if (item == null) return;
+
+            if (e.Button == MouseButtons.Left && (ModifierKeys & Keys.Shift) == Keys.Shift)
+            {
+                if (selectedMarkings.Contains(item))
+                    selectedMarkings.Remove(item);
+                else
+                    selectedMarkings.Add(item);
+
+                selectedMarking = selectedMarkings.Count > 0 ? item : null;
+                UpdateMarkingSelectionVisuals();
+                return;
+            }
+
+            SelectMarking(item);
+            if (e.Button != MouseButtons.Left) return;
+            Point start = item.View.PointToScreen(e.Location);
+            Dictionary<MarkingItem, PointF> originals = new Dictionary<MarkingItem, PointF>();
+            foreach (MarkingItem selected in selectedMarkings)
+                originals[selected] = selected.Position;
+            if (!originals.ContainsKey(item))
+                originals[item] = item.Position;
+            item.View.Capture = true;
+            item.View.MouseMove += MoveMarkingView;
+            item.View.MouseUp += StopMoveMarkingView;
+            item.View.Tag = new object[] { item, start, originals };
+        }
+
+        private void MoveMarkingView(object sender, MouseEventArgs e)
+        {
+            Label view = (Label)sender;
+            object[] state = view.Tag as object[];
+            if (state == null || e.Button == MouseButtons.None) return;
+            Point start = (Point)state[1];
+            Dictionary<MarkingItem, PointF> originals = (Dictionary<MarkingItem, PointF>)state[2];
+            Point current = view.PointToScreen(e.Location);
+            float deltaX = (current.X - start.X) / imageZoom;
+            float deltaY = (current.Y - start.Y) / imageZoom;
+            foreach (KeyValuePair<MarkingItem, PointF> original in originals)
+            {
+                MarkingItem item = original.Key;
+                // Keep the label in stitched-canvas coordinates while dragging.
+                // Do not clamp it to the source image that originally owned it.
+                item.Position = new PointF(original.Value.X + deltaX, original.Value.Y + deltaY);
+                UpdateMarkingImageBinding(item);
+                UpdateMarkingView(item);
+                UpdateMarkingRow(item);
+            }
+            UpdatePositionControls(selectedMarking);
+        }
+
+        private void StopMoveMarkingView(object sender, MouseEventArgs e)
+        {
+            Label view = (Label)sender;
+            object[] state = view.Tag as object[];
+            Dictionary<MarkingItem, PointF> originals = state != null && state.Length > 2
+                ? state[2] as Dictionary<MarkingItem, PointF>
+                : null;
+
+            view.Capture = false;
+            view.MouseMove -= MoveMarkingView;
+            view.MouseUp -= StopMoveMarkingView;
+            view.Tag = state != null && state.Length > 0 ? state[0] : view.Tag;
+
+            if (originals != null)
+            {
+                foreach (MarkingItem item in originals.Keys)
+                {
+                    UpdateMarkingImageBinding(item);
+                    UpdateMarkingView(item);
+                    UpdateMarkingRow(item);
+                }
+                UpdatePositionControls(selectedMarking);
+                SaveCurrentSurfaceToMemory();
+            }
+        }
+        //SelectMarking
+        private void SelectMarking(MarkingItem item)
+        {
+            selectedMarking = item;
+            if (item != null && !selectedMarkings.Contains(item))
+            {
+                selectedMarkings.Clear();
+                selectedMarkings.Add(item);
+            }
+            UpdateMarkingSelectionVisuals();
+        }
+
+        private void CopySelectedMarking()
+        {
+            copiedMarkings.Clear();
+            List<MarkingItem> source = selectedMarkings.Count > 0
+                ? new List<MarkingItem>(selectedMarkings)
+                : selectedMarking == null
+                    ? new List<MarkingItem>()
+                    : new List<MarkingItem> { selectedMarking };
+
+            foreach (MarkingItem item in source)
+            {
+                //item.Rotate = GetMarkingRotation(item.Type).ToString().Replace("f", "");
+                copiedMarkings.Add(new MarkingItem
+                {
+                    ImageId = item.ImageId,
+                    LocalPosition = item.LocalPosition,
+                    Product = item.Product,
+                    Type = item.Type,
+                    PrintType = item.PrintType,
+                    Content = item.Content,
+                    Position = item.Position,
+                    Rotate = item.Rotate,
+                });
+            }
+        }
+
+        private void PasteCopiedMarking()
+        {
+            if (copiedMarkings.Count == 0) return;
+
+            float offset = 20f / Math.Max(0.1f, imageZoom);
+            List<MarkingItem> pastedMarkings = new List<MarkingItem>();
+            foreach (MarkingItem copiedMarking in copiedMarkings)
+            {
+                MarkingItem pasted = new MarkingItem
+                {
+                    Id = nextMarkingId++,
+                    ImageId = copiedMarking.ImageId,
+                    LocalPosition = copiedMarking.LocalPosition,
+                    Product = copiedMarking.Product,
+                    Type = copiedMarking.Type,
+                    PrintType = copiedMarking.PrintType,
+                    Content = copiedMarking.Content,
+                    Position = new PointF(copiedMarking.Position.X + offset, copiedMarking.Position.Y + offset),
+                    Rotate = copiedMarking.Rotate
+                    
+                };
+                ClampPosition(pasted);
+                markings.Add(pasted);
+                pastedMarkings.Add(pasted);
+
+                int row = markingList.Rows.Add(GetMarkingNumber(pasted), pasted.Product, pasted.Type,
+                    FormatCoordinate(GetMarkingCoordinates(pasted).X),
+                    FormatCoordinate(GetMarkingCoordinates(pasted).Y));
+                markingList.Rows[row].Tag = pasted;
+                CreateMarkingView(pasted);
+            }
+
+            selectedMarkings.Clear();
+            selectedMarkings.AddRange(pastedMarkings);
+            selectedMarking = pastedMarkings[pastedMarkings.Count - 1];
+            UpdateMarkingSelectionVisuals();
+        }
+
+        private void UpdateMarkingSelectionVisuals()
+        {
+            updatingMarkingSelection = true;
+            try
+            {
+                markingList.ClearSelection();
+                for (int i = 0; i < markingList.Rows.Count; i++)
+                {
+                    bool selected = selectedMarkings.Contains(markingList.Rows[i].Tag as MarkingItem);
+                    markingList.Rows[i].Selected = selected;
+                    if (selected) markingList.CurrentCell = markingList.Rows[i].Cells[0];
+                }
+            }
+            finally
+            {
+                updatingMarkingSelection = false;
+            }
+
+            foreach (MarkingItem marking in markings)
+                if (marking.View != null) marking.View.BackColor = selectedMarkings.Contains(marking) ? Color.LimeGreen : Color.FromArgb(190, Color.SkyBlue);
+                 
+            UpdatePositionControls(selectedMarking);
+        }
+        private void PrintTypeChanged(object sender, EventArgs e)
+        {
+            if (updatingPositionControls || selectedMarking == null) return;
+          //  selectedMarking.PrintType = NormalizeMarkingType(printType.Text);
+        }
+        private void MarkingContentChanged(object sender, EventArgs e)
+        {
+            if (updatingPositionControls || selectedMarking == null) return;
+            selectedMarking.Content = markingContent.Text;
+            UpdateMarkingDisplay(selectedMarking);
+        }
+
+        private void DetailsButtonClick(object sender, EventArgs e)
+        {
+            if (selectedMarking == null)
+            {
+                MessageBox.Show(this, "Please select a marking item first.", "Details", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            using (MarkingDetailsForm dialog = new MarkingDetailsForm(selectedMarking.PrintType, selectedMarking.Product, selectedMarking.Content))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+                string updatedType = NormalizeMarkingType(dialog.MarkingType);
+                bool viewTypeChanged = (selectedMarking.Type == "CODE") != (updatedType == "CODE");
+                selectedMarking.Type = updatedType;
+                selectedMarking.PrintType = updatedType;
+                selectedMarking.Rotate = GetMarkingRotation(updatedType).ToString();
+                selectedMarking.Product = string.IsNullOrWhiteSpace(dialog.ProductNumber) ? "0" : dialog.ProductNumber;
+                selectedMarking.Content = dialog.Content ?? "";
+
+                if (viewTypeChanged)
+                {
+                    Label previousView = selectedMarking.View;
+                    imageViewport.Controls.Remove(previousView);
+                    previousView.Dispose();
+                    CreateMarkingView(selectedMarking);
+                }
+                else if (selectedMarking.View is DirectionalMarkingLabel directionalView)
+                {
+                    directionalView.Rotation = GetMarkingRotation(updatedType);
+                }
+
+                UpdatePositionControls(selectedMarking);
+                UpdateMarkingDisplay(selectedMarking);
+                UpdateMarkingView(selectedMarking);
+                RebuildMarkingList();
+                SelectMarking(selectedMarking);
+            }
+        }
+        private void SelectPrintType(string type)
+        {
+            string normalized = NormalizeMarkingType(type);
+            //for (int i = 0; i < printType.Items.Count; i++)
+            //{
+            //    if (NormalizeMarkingType(Convert.ToString(printType.Items[i])) == normalized)
+            //    {
+            //        printType.SelectedIndex = i;
+            //        return;
+            //    }
+            //}
+            //printType.Text = normalized;
+        }
+
+        private static void UpdateMarkingDisplay(MarkingItem item)
+        {
+            if (item == null || item.View == null) return;
+            item.View.Text = string.IsNullOrWhiteSpace(item.Content) ? item.Type : item.Content;
+            UpdateQrImage(item);
+            item.View.Invalidate();
+        }
+
+        private static void UpdateQrImage(MarkingItem item)
+        {
+            QrMarkingLabel qrView = item?.View as QrMarkingLabel;
+            if (qrView == null) return;
+
+            if (qrView.QrImage != null)
+            {
+                qrView.QrImage.Dispose();
+                qrView.QrImage = null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(item.Content))
+            {
+                using (QRCodeGenerator generator = new QRCodeGenerator())
+                using (QRCodeData data = generator.CreateQrCode(item.Content, QRCodeGenerator.ECCLevel.Q))
+                using (QRCode qrCode = new QRCode(data))
+                    qrView.QrImage = qrCode.GetGraphic(5);
+            }
+        }
+
+        private void MarkingListSelectionChanged(object sender, EventArgs e)
+        {
+            if (updatingMarkingSelection) return;
+            selectedMarkings.Clear();
+            foreach (DataGridViewRow row in markingList.SelectedRows)
+            {
+                MarkingItem item = row.Tag as MarkingItem;
+                if (item != null) selectedMarkings.Add(item);
+            }
+            selectedMarking = selectedMarkings.Count > 0 ? selectedMarkings[0] : null;
+            UpdatePositionControls(selectedMarking);
+            foreach (MarkingItem marking in markings) if (marking.View != null) marking.View.BackColor = selectedMarkings.Contains(marking) ? Color.LimeGreen : Color.FromArgb(190, Color.SkyBlue);
+        }
+
+        private void PositionValueChanged(object sender, EventArgs e)
+        {
+            if (updatingPositionControls || selectedMarking == null || !positionX.Focused && !positionY.Focused) return;
+            SetMarkingMachineCoordinates(selectedMarking, (float)positionX.Value, (float)positionY.Value);
+            ClampPosition(selectedMarking);
+            UpdateMarkingView(selectedMarking);
+            UpdateMarkingRow(selectedMarking);
+        }
+
+        private void UpdatePositionControls(MarkingItem item)
+        {
+            bool hasMachineOrigin = item == null || string.IsNullOrWhiteSpace(item.ImageId);
+            if (item != null && !string.IsNullOrWhiteSpace(item.ImageId))
+            {
+                LaserScanImageParameter picture = (CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
+                    .FirstOrDefault(x => string.Equals(x.Id, item.ImageId, StringComparison.OrdinalIgnoreCase));
+                hasMachineOrigin = picture != null && picture.ServoX.HasValue && picture.ServoY.HasValue;
+            }
+
+            positionX.Enabled = hasMachineOrigin;
+            positionY.Enabled = hasMachineOrigin;
+            if (item == null) return;
+
+            updatingPositionControls = true;
+            try
+            {
+                PointF machinePosition = GetMarkingCoordinates(item);
+                positionX.Value = ClampValue(positionX, machinePosition.X);
+                positionY.Value = ClampValue(positionY, machinePosition.Y);
+                SelectPrintType(item.PrintType);
+                markingContent.Text = item.Content ?? "";
+            }
+            finally
+            {
+                updatingPositionControls = false;
+            }
+        }
+
+        private static decimal ClampValue(NumericUpDown control, float value)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value)) return control.Minimum;
+            return Math.Max(control.Minimum, Math.Min(control.Maximum, (decimal)value));
+        }
+
+        private void UpdateMarkingView(MarkingItem item)
+        {
+            if (item.View == null) return;
+            bool vertical = item.Type == "TOPTEXT" || item.Type == "BOTTOMTEXT";
+            string displayText = string.IsNullOrWhiteSpace(item.Content) ? item.Type : item.Content;
+            // Font metrics and control bounds must use the same zoom factor exactly once.
+            // Previously the font was enlarged by imageZoom, then the measured width/height
+            // were multiplied by imageZoom again, causing marking text boxes to grow too fast.
+            Font previousFont = item.View.Font;
+            item.View.Font = new Font("Times New Roman", Math.Max(1f, MarkingFontSize * imageZoom), FontStyle.Regular);
+            if (previousFont != null && !ReferenceEquals(previousFont, Control.DefaultFont))
+                previousFont.Dispose();
+
+            string[] textLines = displayText.Replace("\r\n", "\n").Split('\n');
+            int textWidth = 0;
+            int textHeight;
+            using (Font measureFont = new Font("Times New Roman", MarkingFontSize, FontStyle.Regular))
+            {
+                foreach (string line in textLines)
+                    textWidth = Math.Max(textWidth, TextRenderer.MeasureText(line, measureFont).Width);
+                textHeight = TextRenderer.MeasureText("Ag", measureFont).Height * textLines.Length;
+            }
+
+            Size baseSize = item.Type == "CODE"
+                ? new Size(35, 35)
+                : vertical
+                ? new Size(Math.Max(40, textHeight + 12), Math.Max(120, textWidth + 8))
+                : new Size(Math.Max(120, textWidth + 8), Math.Max(40, textHeight + 12));
+            item.View.Size = new Size(
+                Math.Max(1, (int)Math.Round(baseSize.Width * imageZoom)),
+                Math.Max(1, (int)Math.Round(baseSize.Height * imageZoom)));
+            item.View.Left = markingImage.Left + (int)(item.Position.X * imageZoom) - item.View.Width / 2;
+            item.View.Top = markingImage.Top + (int)(item.Position.Y * imageZoom) - item.View.Height / 2;
+            item.View.BringToFront();
+        }
+
+        private void UpdateAllMarkingViews()
+        {
+            foreach (MarkingItem item in markings) UpdateMarkingView(item);
+            UpdateAllFiducialViews();
+        }
+
+        private void ClampPosition(MarkingItem item)
+        {
+            if (markingImage.Image == null) return;
+            if (!string.IsNullOrWhiteSpace(item.ImageId))
+            {
+                ImageTileInfo tile = FindImageTile(item.ImageId);
+                if (tile != null)
+                {
+                    item.Position = new PointF(Math.Max(tile.DisplayBounds.Left, Math.Min(tile.DisplayBounds.Right, item.Position.X)),
+                                               Math.Max(tile.DisplayBounds.Top, Math.Min(tile.DisplayBounds.Bottom, item.Position.Y)));
+                    item.LocalPosition = CanvasToSource(item.ImageId, item.Position);
+                    item.LocalPosition = new PointF(Math.Max(0, Math.Min(tile.SourceWidth, item.LocalPosition.X)),
+                                                    Math.Max(0, Math.Min(tile.SourceHeight, item.LocalPosition.Y)));
+                    item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+                    return;
+                }
+            }
+            item.Position = new PointF(Math.Max(0, Math.Min(markingImage.Image.Width, item.Position.X)), Math.Max(0, Math.Min(markingImage.Image.Height, item.Position.Y)));
+        }
+
+        private static string FormatCoordinate(float value)
+        {
+            return float.IsNaN(value) || float.IsInfinity(value) ? "" : value.ToString("0.00");
+        }
+
+        // Image-local source pixels are the persistent coordinates for each image.
+        // Servo X/Y identify the image centre at capture time; ImagePixelToMM is the sole scale.
+        private PointF TransformServoAxes(double x, double y)
+        {
+            return TransformServoAxes(CurrentParameters, x, y);
+        }
+
+        private static PointF TransformServoAxes(LaserSurfaceParameter parameters, double x, double y)
+        {
+            if (parameters != null && parameters.EnableServoAxisTransform)
+            {
+                if (parameters.SwapServoAxes) { double temp = x; x = y; y = temp; }
+                if (parameters.ReverseServoX) x = -x;
+                if (parameters.ReverseServoY) y = -y;
+            }
+            return new PointF((float)x, (float)y);
+        }
+
+        public static PointF GetServoImageMachinePoint(
+            LaserSurfaceParameter parameters, LaserScanImageParameter picture,
+            int imageWidth, int imageHeight, double mmPerPixel, double sourceX, double sourceY)
+        {
+            PointF center = TransformServoAxes(parameters, picture.ServoX.Value, picture.ServoY.Value);
+            PointF offset = TransformServoAxes(parameters,
+                (sourceX - imageWidth / 2.0) * mmPerPixel,
+                -(sourceY - imageHeight / 2.0) * mmPerPixel);
+            return new PointF(center.X + offset.X, center.Y + offset.Y);
+        }
+
+        public static PointF MachineToStitchPixel(
+            double machineX, double machineY, double minX, double maxY,
+            double pixelsPerMM, float margin)
+        {
+            return new PointF(
+                (float)(margin + (machineX - minX) * pixelsPerMM),
+                (float)(margin + (maxY - machineY) * pixelsPerMM));
+        }
+
+        private PointF InverseTransformServoAxes(double x, double y)
+        {
+            LaserSurfaceParameter parameters = CurrentParameters;
+            if (parameters.EnableServoAxisTransform)
+            {
+                if (parameters.ReverseServoX) x = -x;
+                if (parameters.ReverseServoY) y = -y;
+                if (parameters.SwapServoAxes) { double temp = x; x = y; y = temp; }
+            }
+            return new PointF((float)x, (float)y);
+        }
+
+        private PointF GetImageMachineCoordinates(string imageId, PointF sourcePixel)
+        {
+            LaserScanImageParameter picture = (CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
+                .FirstOrDefault(x => string.Equals(x.Id, imageId, StringComparison.OrdinalIgnoreCase));
+            ImageTileInfo tile = FindImageTile(imageId);
+            if (picture == null || tile == null || !picture.ServoX.HasValue || !picture.ServoY.HasValue)
+                return new PointF(float.NaN, float.NaN);
+
+            double mmPerPixel = Math.Max(0.0000001, CurrentParameters.ImagePixelToMM);
+            PointF center = TransformServoAxes(picture.ServoX.Value, picture.ServoY.Value);
+            PointF offset = TransformServoAxes(
+                (sourcePixel.X - tile.SourceWidth / 2.0) * mmPerPixel,
+                -(sourcePixel.Y - tile.SourceHeight / 2.0) * mmPerPixel);
+            return new PointF(center.X + offset.X, center.Y + offset.Y);
+        }
+
+        private PointF MachineToImageSourcePixel(string imageId, float machineX, float machineY)
+        {
+            LaserScanImageParameter picture = (CurrentParameters.ScanImages ?? new List<LaserScanImageParameter>())
+                .FirstOrDefault(x => string.Equals(x.Id, imageId, StringComparison.OrdinalIgnoreCase));
+            ImageTileInfo tile = FindImageTile(imageId);
+            if (picture == null || tile == null || !picture.ServoX.HasValue || !picture.ServoY.HasValue)
+                return new PointF(ToPixel(machineX), ToPixel(machineY));
+
+            double mmPerPixel = Math.Max(0.0000001, CurrentParameters.ImagePixelToMM);
+            PointF center = TransformServoAxes(picture.ServoX.Value, picture.ServoY.Value);
+            PointF offset = InverseTransformServoAxes(machineX - center.X, machineY - center.Y);
+            return new PointF((float)(tile.SourceWidth / 2.0 + offset.X / mmPerPixel),
+                              (float)(tile.SourceHeight / 2.0 - offset.Y / mmPerPixel));
+        }
+
+        private PointF GetMarkingCoordinates(MarkingItem item)
+        {
+            if (item == null) return PointF.Empty;
+            return string.IsNullOrWhiteSpace(item.ImageId)
+                ? GetMarkingCoordinates(item.Position)
+                : GetImageMachineCoordinates(item.ImageId, item.LocalPosition);
+        }
+
+        private PointF GetFiducialCoordinates(FiducialItem item)
+        {
+            if (item == null) return PointF.Empty;
+            return string.IsNullOrWhiteSpace(item.ImageId)
+                ? GetMarkingCoordinates(item.Position)
+                : GetImageMachineCoordinates(item.ImageId, item.LocalPosition);
+        }
+
+        private void SetMarkingMachineCoordinates(MarkingItem item, float machineX, float machineY)
+        {
+            if (item == null) return;
+            if (string.IsNullOrWhiteSpace(item.ImageId))
+            {
+                item.Position = MachineToImagePixel(machineX, machineY);
+                return;
+            }
+            item.LocalPosition = MachineToImageSourcePixel(item.ImageId, machineX, machineY);
+            item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+        }
+
+        private void SetFiducialMachineCoordinates(FiducialItem item, float machineX, float machineY)
+        {
+            if (item == null) return;
+            if (string.IsNullOrWhiteSpace(item.ImageId))
+            {
+                item.Position = MachineToImagePixel(machineX, machineY);
+                return;
+            }
+            item.LocalPosition = MachineToImageSourcePixel(item.ImageId, machineX, machineY);
+            item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+        }
+
+        private PointF GetMarkingCoordinates(PointF imagePixel)
+        {
+            LaserSurfaceParameter parameters = CurrentParameters;
+            if (parameters.HasStitchCoordinateSystem && parameters.StitchPixelToMM > 0)
+                return new PointF((float)(parameters.StitchOriginX + imagePixel.X * parameters.StitchPixelToMM),
+                                  (float)(parameters.StitchOriginY - imagePixel.Y * parameters.StitchPixelToMM));
+            return new PointF(ToMillimeter(imagePixel.X), ToMillimeter(imagePixel.Y));
+        }
+
+        private PointF MachineToImagePixel(float machineX, float machineY)
+        {
+            LaserSurfaceParameter parameters = CurrentParameters;
+            if (parameters.HasStitchCoordinateSystem && parameters.StitchPixelToMM > 0)
+                return new PointF((float)((machineX - parameters.StitchOriginX) / parameters.StitchPixelToMM),
+                                  (float)((parameters.StitchOriginY - machineY) / parameters.StitchPixelToMM));
+            return new PointF(ToPixel(machineX), ToPixel(machineY));
+        }
+
+        private static bool TryParseCoordinate(object value, out float coordinate)
+        {
+            string text = Convert.ToString(value).Trim();
+            double parsed;
+            bool valid = double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out parsed) ||
+                         double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed);
+            coordinate = valid && !double.IsNaN(parsed) && !double.IsInfinity(parsed) ? (float)parsed : 0f;
+            return valid && !double.IsNaN(parsed) && !double.IsInfinity(parsed) &&
+                   parsed <= float.MaxValue && parsed >= float.MinValue;
+        }
+
+        private void MarkingListCellEndEdit(object sender, DataGridViewCellEventArgs e)
+        {
+            if (loadingSurfaceControls || e.RowIndex < 0 || e.ColumnIndex < 0) return;
+            DataGridViewRow row = markingList.Rows[e.RowIndex];
+            MarkingItem item = row.Tag as MarkingItem;
+            if (item == null) return;
+
+            string column = markingList.Columns[e.ColumnIndex].Name;
+            if (column != "X" && column != "Y") return;
+
+            float value;
+            if (!TryParseCoordinate(row.Cells[e.ColumnIndex].Value, out value))
+            {
+                UpdateMarkingRow(item);
+                return;
+            }
+
+            PointF machine = GetMarkingCoordinates(item);
+            if (float.IsNaN(machine.X) || float.IsNaN(machine.Y))
+            {
+                MessageBox.Show("Set Servo X and Servo Y for the source picture before editing machine coordinates.",
+                    "Servo Position Required", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateMarkingRow(item);
+                return;
+            }
+            if (column == "X") machine.X = value;
+            else machine.Y = value;
+
+            SetMarkingMachineCoordinates(item, machine.X, machine.Y);
+            ClampPosition(item);
+            UpdateMarkingView(item);
+            UpdatePositionControls(item);
+            UpdateMarkingRow(item);
+            SaveCurrentSurfaceToMemory();
+        }
+
+        private void FiducialListCellEndEdit(object sender, DataGridViewCellEventArgs e)
+        {
+            if (loadingSurfaceControls || e.RowIndex < 0 || e.ColumnIndex < 1 || e.ColumnIndex > 2) return;
+            DataGridViewRow row = fiducialList.Rows[e.RowIndex];
+            FiducialItem item = row.Tag as FiducialItem;
+            if (item == null) return;
+
+            float value;
+            if (!TryParseCoordinate(row.Cells[e.ColumnIndex].Value, out value))
+            {
+                UpdateFiducialRow(item);
+                return;
+            }
+
+            PointF machine = GetFiducialCoordinates(item);
+            if (float.IsNaN(machine.X) || float.IsNaN(machine.Y))
+            {
+                MessageBox.Show("Set Servo X and Servo Y for the source picture before editing machine coordinates.",
+                    "Servo Position Required", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateFiducialRow(item);
+                return;
+            }
+            if (e.ColumnIndex == 1) machine.X = value;
+            else machine.Y = value;
+
+            SetFiducialMachineCoordinates(item, machine.X, machine.Y);
+            ClampFiducial(item);
+            UpdateFiducialView(item);
+            UpdateFiducialRow(item);
+            SaveCurrentSurfaceToMemory();
+        }
+
+        private void RefreshFiducialRows()
+        {
+            foreach (FiducialItem item in fiducials)
+                UpdateFiducialRow(item);
+        }
+
+       
+
+        private float ImagePixelToMM
+        {
+            get { return ParseResolution(imagePixelToMmValue.Text, 1f); }
+        }
+
+        private float ToMillimeter(float pixel) { return pixel * ImagePixelToMM; }
+        private float ToPixel(float millimeter) { return millimeter / ImagePixelToMM; }
+
+        private void ResolutionValueTextChanged(object sender, EventArgs e)
+        {
+            foreach (MarkingItem item in markings) UpdateMarkingRow(item);
+            RefreshFiducialRows();
+            UpdatePositionControls(selectedMarking);
+
+            if (ReferenceEquals(sender, imagePixelToMmValue) && !loadingSurfaceControls)
+            {
+                double scale;
+                if (double.TryParse(imagePixelToMmValue.Text, NumberStyles.Float,
+                    CultureInfo.CurrentCulture, out scale) ||
+                    double.TryParse(imagePixelToMmValue.Text, NumberStyles.Float,
+                    CultureInfo.InvariantCulture, out scale))
+                {
+                    if (scale > 0 && !double.IsNaN(scale) && !double.IsInfinity(scale))
+                    {
+                        SaveCurrentSurfaceToMemory();
+                        RebuildSurfaceImage(currentSurface);
+                    }
+                }
+            }
+        }
+
+        private void SelectionMouseDown(object sender, MouseEventArgs e)
+        {
+            if (panMode || addingFiducial || e.Button != MouseButtons.Left) return;
+            selectingMarkings = true;
+            selectionStart = ToViewportPoint((Control)sender, e.Location);
+            selectionEnd = selectionStart;
+            imageViewport.Capture = true;
+            InvalidateSelectionArea();
+        }
+
+        private void SelectionMouseMove(object sender, MouseEventArgs e)
+        {
+            if (!selectingMarkings) return;
+            selectionEnd = ToViewportPoint((Control)sender, e.Location);
+            InvalidateSelectionArea();
+        }
+
+        private void SelectionMouseUp(object sender, MouseEventArgs e)
+        {
+            if (!selectingMarkings || e.Button != MouseButtons.Left) return;
+            selectingMarkings = false;
+            selectionEnd = ToViewportPoint((Control)sender, e.Location);
+            imageViewport.Capture = false;
+            Rectangle selection = NormalizeRectangle(selectionStart, selectionEnd);
+            if (selection.Width > 3 || selection.Height > 3)
+            {
+                if ((ModifierKeys & Keys.Shift) != Keys.Shift) selectedMarkings.Clear();
+                foreach (MarkingItem item in markings)
+                {
+                    Rectangle bounds = new Rectangle(
+                        item.View.Left,
+                        item.View.Top,
+                        item.View.Width,
+                        item.View.Height);
+                    if (selection.IntersectsWith(bounds) && !selectedMarkings.Contains(item))
+                        selectedMarkings.Add(item);
+                }
+                selectedMarking = selectedMarkings.Count > 0 ? selectedMarkings[selectedMarkings.Count - 1] : null;
+                UpdateMarkingSelectionVisuals();
+            }
+            InvalidateSelectionArea();
+        }
+
+        private Point ToViewportPoint(Control source, Point point)
+        {
+            return imageViewport.PointToClient(source.PointToScreen(point));
+        }
+
+        private void InvalidateSelectionArea()
+        {
+            imageViewport.Invalidate();
+            markingImage.Invalidate();
+        }
+
+        private static Rectangle NormalizeRectangle(Point first, Point second)
+        {
+            return new Rectangle(Math.Min(first.X, second.X), Math.Min(first.Y, second.Y), Math.Abs(first.X - second.X), Math.Abs(first.Y - second.Y));
+        }
+
+        private void ImageViewportPaint(object sender, PaintEventArgs e)
+        {
+            if (!selectingMarkings || markingImage.Bounds.Contains(selectionStart)) return;
+            DrawSelectionRectangle(e.Graphics, NormalizeRectangle(selectionStart, selectionEnd));
+        }
+
+        private void MarkingImagePaint(object sender, PaintEventArgs e)
+        {
+            if (!selectingMarkings) return;
+            Point start = markingImage.PointToClient(imageViewport.PointToScreen(selectionStart));
+            Point end = markingImage.PointToClient(imageViewport.PointToScreen(selectionEnd));
+            DrawSelectionRectangle(e.Graphics, NormalizeRectangle(start, end));
+        }
+
+        private static void DrawSelectionRectangle(Graphics graphics, Rectangle selection)
+        {
+            using (Brush brush = new SolidBrush(Color.FromArgb(45, Color.DodgerBlue)))
+            using (Pen pen = new Pen(Color.DodgerBlue, 1))
+            {
+                graphics.FillRectangle(brush, selection);
+                graphics.DrawRectangle(pen, selection);
+            }
+        }
+
+        private void UpdateMarkingRow(MarkingItem item)
+        {
+            foreach (DataGridViewRow row in markingList.Rows)
+                if (row.Tag == item)
+                {
+                    PointF machinePosition = GetMarkingCoordinates(item);
+                    row.Cells["X"].Value = FormatCoordinate(machinePosition.X);
+                    row.Cells["Y"].Value = FormatCoordinate(machinePosition.Y);
+                    break;
+                }
+        }
+
+        private void RefreshMarkingRows()
+        {
+            foreach (MarkingItem item in markings)
+                UpdateMarkingRow(item);
+        }
+
+        private void InitializeMarkingList()
+        {
+            if (markingList.Columns.Count == 0)
+            {
+                markingList.Columns.Add("Number", "No.");
+                markingList.Columns.Add("Product", "Product");
+                markingList.Columns.Add("Type", "Type");
+                markingList.Columns.Add("X", "X (mm)");
+                markingList.Columns.Add("Y", "Y (mm)");
+                markingList.Columns[0].FillWeight = 35;
+            }
+
+            if (fiducialList.Columns.Count == 0)
+            {
+                fiducialList.Columns.Add("Point", "Point No.");
+                fiducialList.Columns.Add("X", "X");
+                fiducialList.Columns.Add("Y", "Y");
+            }
+
+        }
+
+        private void MarkingImageMouseWheel(object sender, MouseEventArgs e)
+        {
+            Point viewportPoint = imageViewport.PointToClient(Control.MousePosition);
+            ZoomAt(viewportPoint, e.Delta);
+        }
+
+        private void ImageAreaMouseEnter(object sender, EventArgs e)
+        {
+            Control control = sender as Control;
+            if (control != null && control.CanFocus)
+                control.Focus();
+        }
+
+        private void ZoomAt(Point viewportPoint, int wheelDelta)
+        {
+            if (markingImage.Image == null || wheelDelta == 0) return;
+
+            // Convert the cursor position using the bitmap's actual integer display size.
+            // This avoids sub-pixel drift caused by rounding PictureBox.Width/Height.
+            Point imagePoint = markingImage.PointToClient(imageViewport.PointToScreen(viewportPoint));
+            zoomAnchorImageX = imagePoint.X * (double)markingImage.Image.Width / Math.Max(1, markingImage.Width);
+            zoomAnchorImageY = imagePoint.Y * (double)markingImage.Image.Height / Math.Max(1, markingImage.Height);
+            zoomAnchor = viewportPoint;
+
+            float startingZoom = zoomAnimationTimer.Enabled ? targetZoom : imageZoom;
+            float zoomFactor = (float)Math.Pow(1.12, wheelDelta / 120.0);
+            targetZoom = Math.Max(0.05f, Math.Min(12f, startingZoom * zoomFactor));
+            if (Math.Abs(targetZoom - imageZoom) < 0.0001f)
+            {
+                zoomAnimationTimer.Stop();
+                return;
+            }
+
+            if (!zoomAnimationTimer.Enabled)
+                zoomAnimationTimer.Start();
+        }
+
+        private void ZoomAnimationTick(object sender, EventArgs e)
+        {
+            float difference = targetZoom - imageZoom;
+            float nextZoom = Math.Abs(difference) < 0.001f
+                ? targetZoom
+                : imageZoom + difference * 0.28f;
+
+            ApplyZoomAt(zoomAnchor, zoomAnchorImageX, zoomAnchorImageY, nextZoom);
+
+            if (Math.Abs(targetZoom - imageZoom) < 0.001f)
+            {
+                ApplyZoomAt(zoomAnchor, zoomAnchorImageX, zoomAnchorImageY, targetZoom);
+                zoomAnimationTimer.Stop();
+            }
+        }
+
+        private void ApplyZoomAt(Point viewportPoint, double imageX, double imageY, float newZoom)
+        {
+            imageZoom = newZoom;
+
+            // Use the effective X/Y scales after integer sizing, not the requested
+            // floating-point zoom. The same source pixel therefore stays under the cursor.
+            int scaledWidth = Math.Max(100, (int)Math.Round(markingImage.Image.Width * imageZoom));
+            int scaledHeight = Math.Max(100, (int)Math.Round(markingImage.Image.Height * imageZoom));
+            double effectiveScaleX = (double)scaledWidth / markingImage.Image.Width;
+            double effectiveScaleY = (double)scaledHeight / markingImage.Image.Height;
+            int baseLeft = (imageViewport.ClientSize.Width - scaledWidth) / 2;
+            int baseTop = (imageViewport.ClientSize.Height - scaledHeight) / 2;
+            imagePan = new Point(
+                (int)Math.Round(viewportPoint.X - imageX * effectiveScaleX - baseLeft),
+                (int)Math.Round(viewportPoint.Y - imageY * effectiveScaleY - baseTop));
+            UpdateImageTransform();
+        }
+
+        private void MarkingImageMouseDown(object sender, MouseEventArgs e)
+        {
+            panning = false;
+        }
+
+        private void MarkingImageMouseMove(object sender, MouseEventArgs e)
+        {
+            return;
+        }
+
+        private void MarkingImageMouseUp(object sender, MouseEventArgs e)
+        {
+            panning = false;
+        }
+
+        private void ZoomInClick(object sender, EventArgs e)
+        {
+            Point center = new Point(imageViewport.ClientSize.Width / 2, imageViewport.ClientSize.Height / 2);
+            ZoomAt(center, 120);
+        }
+
+        private void ZoomOutClick(object sender, EventArgs e)
+        {
+            Point center = new Point(imageViewport.ClientSize.Width / 2, imageViewport.ClientSize.Height / 2);
+            ZoomAt(center, -120);
+        }
+
+        private void FitImageClick(object sender, EventArgs e)
+        {
+            if (zoomAnimationTimer != null)
+                zoomAnimationTimer.Stop();
+
+            if (markingImage.Image == null)
+            {
+                imageZoom = 1f;
+                targetZoom = imageZoom;
+                UpdateImageTransform();
+                return;
+            }
+
+            int viewportWidth = Math.Max(1, imageViewport.ClientSize.Width);
+            int viewportHeight = Math.Max(1, imageViewport.ClientSize.Height);
+            imageZoom = Math.Min((float)viewportWidth / markingImage.Image.Width, (float)viewportHeight / markingImage.Image.Height);
+            imageZoom = Math.Max(0.05f, Math.Min(12f, imageZoom));
+            targetZoom = imageZoom;
+            imagePan = Point.Empty;
+            UpdateImageTransform();
+        }
+
+        private void UpdateImageTransform()
+        {
+            if (markingImage.Image == null)
+            {
+                markingImage.Location = Point.Empty;
+                imageViewport.Invalidate();
+                UpdateZoomLabel();
+                return;
+            }
+
+            markingImage.SizeMode = PictureBoxSizeMode.StretchImage;
+            int scaledWidth = Math.Max(100, (int)Math.Round(markingImage.Image.Width * imageZoom));
+            int scaledHeight = Math.Max(100, (int)Math.Round(markingImage.Image.Height * imageZoom));
+
+            imageViewport.SuspendLayout();
+            try
+            {
+                if (markingImage.Width != scaledWidth || markingImage.Height != scaledHeight)
+                    markingImage.Size = new Size(scaledWidth, scaledHeight);
+
+                int centeredLeft = (imageViewport.ClientSize.Width - scaledWidth) / 2;
+                int centeredTop = (imageViewport.ClientSize.Height - scaledHeight) / 2;
+                markingImage.Location = new Point(centeredLeft + imagePan.X, centeredTop + imagePan.Y);
+            }
+            finally
+            {
+                imageViewport.ResumeLayout(false);
+            }
+
+            UpdateAllMarkingViews();
+            UpdateZoomLabel();
+        }
+
+        // Panning only changes the canvas origin. Do not resize the bitmap or
+        // recalculate fonts/QR controls on every mouse-move message.
+        private void UpdateImagePanOnly()
+        {
+            if (markingImage.Image == null) return;
+
+            Rectangle oldImageBounds = markingImage.Bounds;
+            Rectangle oldViewportBounds = imageViewport.ClientRectangle;
+            int centeredLeft = (imageViewport.ClientSize.Width - markingImage.Width) / 2;
+            int centeredTop = (imageViewport.ClientSize.Height - markingImage.Height) / 2;
+            Point nextLocation = new Point(centeredLeft + imagePan.X, centeredTop + imagePan.Y);
+
+            // Move the bitmap and its sibling marking labels in one layout batch.
+            imageViewport.SuspendLayout();
+            try
+            {
+                markingImage.Location = nextLocation;
+                foreach (MarkingItem item in markings)
+                    UpdateMarkingViewPositionOnly(item);
+            }
+            finally
+            {
+                imageViewport.ResumeLayout(false);
+            }
+
+            Rectangle dirty = Rectangle.Union(oldImageBounds, markingImage.Bounds);
+            dirty.Inflate(2, 2);
+            dirty.Intersect(oldViewportBounds);
+            if (!dirty.IsEmpty)
+                imageViewport.Invalidate(dirty, true);
+            imageViewport.Invalidate();
+        }
+
+        private void UpdateMarkingViewPositionOnly(MarkingItem item)
+        {
+            if (item == null || item.View == null) return;
+            item.View.Left = markingImage.Left + (int)Math.Round(item.Position.X * imageZoom) - item.View.Width / 2;
+            item.View.Top = markingImage.Top + (int)Math.Round(item.Position.Y * imageZoom) - item.View.Height / 2;
+        }
+
+        private void UpdateZoomLabel()
+        {
+            zoomLabel.Text = string.Format("{0}%", (int)(imageZoom * 100));
+        }
+
+        private void ImageViewportResize(object sender, EventArgs e)
+        {
+            UpdateImageTransform();
+        }
+
+        private void AddFiducialClick(object sender, EventArgs e)
+        {
+            addingFiducial = !addingFiducial;
+            addFiducial.Text = addingFiducial ? "Click Image" : "Add";
+            addFiducial.BackColor = addingFiducial ? Color.LightGreen : SystemColors.Control;
+            markingImage.Cursor = addingFiducial ? Cursors.Cross : Cursors.Default;
+            imageViewport.Cursor = addingFiducial ? Cursors.Cross : Cursors.Default;
+        }
+
+        private void AddFiducialAtMouseDown(object sender, MouseEventArgs e)
+        {
+            if (!addingFiducial || e.Button != MouseButtons.Left) return;
+
+            Point viewportPoint = imageViewport.PointToClient(((Control)sender).PointToScreen(e.Location));
+            PointF imagePoint;
+            string imageId;
+            PointF localPoint;
+            if (!TryGetImageTilePoint(viewportPoint, out imagePoint, out imageId, out localPoint)) return;
+
+            AddFiducial(imagePoint, nextFiducialId++, imageId, localPoint);
+            addingFiducial = false;
+            addFiducial.Text = "Add";
+            addFiducial.BackColor = SystemColors.Control;
+            markingImage.Cursor = Cursors.Default;
+            imageViewport.Cursor = Cursors.Default;
+        }
+
+        private void AddFiducial(PointF position, int id)
+        {
+            AddFiducial(position, id, "", position);
+        }
+
+        private void AddFiducial(PointF position, int id, string imageId, PointF localPosition)
+        {
+            nextFiducialId = Math.Max(nextFiducialId, id + 1);
+            FiducialItem item = new FiducialItem
+            {
+                Id = id,
+                ImageId = imageId ?? "",
+                LocalPosition = localPosition,
+                Position = string.IsNullOrWhiteSpace(imageId) ? position : SourceToCanvas(imageId, localPosition)
+            };
+            fiducials.Add(item);
+            PointF servoPosition = GetFiducialCoordinates(item);
+            int row = fiducialList.Rows.Add(item.Id.ToString(), FormatCoordinate(servoPosition.X), FormatCoordinate(servoPosition.Y));
+            fiducialList.Rows[row].Tag = item;
+            item.View = new FiducialLabel
+            {
+                AutoSize = false,
+                Text = "",
+                Font = new Font(Font.FontFamily, 9f, FontStyle.Bold),
+                ForeColor = Color.Red,
+                BackColor = Color.Transparent,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Tag = item,
+                Cursor = Cursors.Hand
+            };
+            item.View.MouseDown += FiducialMouseDown;
+            item.View.MouseDown += PanMouseDown;
+            item.View.MouseMove += PanMouseMove;
+            item.View.MouseUp += PanMouseUp;
+            item.View.MouseWheel += MarkingImageMouseWheel;
+            item.View.MouseEnter += ImageAreaMouseEnter;
+            markingImage.Controls.Add(item.View);
+            item.View.BringToFront();
+            UpdateFiducialView(item);
+        }
+
+        private static Region CreateFiducialRegion(Size size)
+        {
+            int arm = 3;
+            int centerX = size.Width / 2;
+            int centerY = size.Height / 2;
+            GraphicsPath path = new GraphicsPath();
+            path.AddPolygon(new[]
+            {
+                new Point(centerX - arm, 0),
+                new Point(centerX + arm, 0),
+                new Point(centerX + arm, centerY - arm),
+                new Point(size.Width, centerY - arm),
+                new Point(size.Width, centerY + arm),
+                new Point(centerX + arm, centerY + arm),
+                new Point(centerX + arm, size.Height),
+                new Point(centerX - arm, size.Height),
+                new Point(centerX - arm, centerY + arm),
+                new Point(0, centerY + arm),
+                new Point(0, centerY - arm),
+                new Point(centerX - arm, centerY - arm)
+            });
+            Region region = new Region(path);
+            path.Dispose();
+            return region;
+        }
+
+        private void FiducialMouseDown(object sender, MouseEventArgs e)
+        {
+            FiducialItem item = ((Control)sender).Tag as FiducialItem;
+            if (item == null || e.Button != MouseButtons.Left) return;
+            selectedFiducial = item;
+            Point start = item.View.PointToScreen(e.Location);
+            PointF original = item.Position;
+            item.View.Capture = true;
+            MouseEventHandler move = null;
+            MouseEventHandler up = null;
+            move = (s, args) =>
+            {
+                Point current = item.View.PointToScreen(args.Location);
+                // Fiducials can also move freely between stitched image tiles.
+                item.Position = new PointF(original.X + (current.X - start.X) / imageZoom, original.Y + (current.Y - start.Y) / imageZoom);
+                UpdateFiducialImageBinding(item);
+                UpdateFiducialView(item);
+                UpdateFiducialRow(item);
+            };
+            up = (s, args) =>
+            {
+                item.View.Capture = false;
+                item.View.MouseMove -= move;
+                item.View.MouseUp -= up;
+                UpdateFiducialImageBinding(item);
+                UpdateFiducialView(item);
+                UpdateFiducialRow(item);
+                SaveCurrentSurfaceToMemory();
+            };
+            item.View.MouseMove += move;
+            item.View.MouseUp += up;
+        }
+
+        private void UpdateFiducialView(FiducialItem item)
+        {
+            if (item == null || item.View == null) return;
+
+            FiducialLabel view = item.View as FiducialLabel;
+            if (view == null) return;
+
+            // Keep the fiducial annotation compact: show only its ID, not servo coordinates.
+            // The coordinate values remain available in the fiducial table.
+            view.Text = "F" + item.Id;
+
+            float zoom = Math.Max(0.05f, imageZoom);
+            view.DisplayZoom = zoom;
+
+            const float baseFontSize = 9f;
+            int baseTextWidth;
+            int baseTextHeight;
+            using (Font measureFont = new Font(Font.FontFamily, baseFontSize, FontStyle.Bold))
+            {
+                baseTextWidth = TextRenderer.MeasureText(
+                    view.Text, measureFont, Size.Empty,
+                    TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+                baseTextHeight = TextRenderer.MeasureText(
+                    "Ag", measureFont, Size.Empty,
+                    TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Height;
+            }
+
+            float targetFontSize = Math.Max(1f, baseFontSize * zoom);
+            // Do not recreate/dispose the Font on every MouseMove. Replacing it while
+            // WinForms is repainting the label can leave GDI+ with an invalid Font.
+            if (Math.Abs(view.Font.Size - targetFontSize) > 0.1f)
+                view.Font = new Font(view.Font.FontFamily, targetFontSize, FontStyle.Bold);
+
+            // Reserve a zoom-scaled left margin for the plus; Label paints the ID itself.
+            view.Padding = new Padding((int)Math.Ceiling(20f * zoom), 0, 0, 0);
+
+            // Scale the marker and its short ID label once, using base-font metrics.
+            int width = (int)Math.Ceiling((20f + baseTextWidth + 8f) * zoom);
+            int height = (int)Math.Ceiling(Math.Max(24f, baseTextHeight + 6f) * zoom);
+            view.Size = new Size(Math.Max(1, width), Math.Max(1, height));
+
+            // The intersection of '+' remains exactly at the fiducial image position.
+            view.Left = (int)Math.Round(item.Position.X * zoom - view.MarkerCenterX);
+            view.Top = (int)Math.Round(item.Position.Y * zoom - view.Height / 2f);
+            view.BringToFront();
+        }
+
+        private void UpdateAllFiducialViews() { foreach (FiducialItem item in fiducials) UpdateFiducialView(item); }
+        private void ClampFiducial(FiducialItem item)
+        {
+            if (markingImage.Image == null) return;
+            if (!string.IsNullOrWhiteSpace(item.ImageId))
+            {
+                ImageTileInfo tile = FindImageTile(item.ImageId);
+                if (tile != null)
+                {
+                    item.Position = new PointF(Math.Max(tile.DisplayBounds.Left, Math.Min(tile.DisplayBounds.Right, item.Position.X)),
+                                               Math.Max(tile.DisplayBounds.Top, Math.Min(tile.DisplayBounds.Bottom, item.Position.Y)));
+                    item.LocalPosition = CanvasToSource(item.ImageId, item.Position);
+                    item.LocalPosition = new PointF(Math.Max(0, Math.Min(tile.SourceWidth, item.LocalPosition.X)),
+                                                    Math.Max(0, Math.Min(tile.SourceHeight, item.LocalPosition.Y)));
+                    item.Position = SourceToCanvas(item.ImageId, item.LocalPosition);
+                    return;
+                }
+            }
+            item.Position = new PointF(Math.Max(0, Math.Min(markingImage.Image.Width, item.Position.X)),
+                                       Math.Max(0, Math.Min(markingImage.Image.Height, item.Position.Y)));
+        }
+        private void UpdateFiducialRow(FiducialItem item)
+        {
+            if (item == null) return;
+            PointF servoPosition = GetFiducialCoordinates(item);
+            foreach (DataGridViewRow row in fiducialList.Rows)
+                if (row.Tag == item)
+                {
+                    row.Cells[1].Value = FormatCoordinate(servoPosition.X);
+                    row.Cells[2].Value = FormatCoordinate(servoPosition.Y);
+                    break;
+                }
+
+            // Keep the coordinate annotation next to the cross in sync with the table.
+            UpdateFiducialView(item);
+        }
+        private void DeleteAllFiducials()
+        {
+            foreach (FiducialItem item in fiducials) if (item.View != null) markingImage.Controls.Remove(item.View);
+            fiducials.Clear();
+            nextFiducialId = 0;
+            fiducialList.Rows.Clear();
+        }
+
+        private void DeleteFiducialClick(object sender, EventArgs e)
+        {
+            if (fiducialList.CurrentRow == null || fiducialList.CurrentRow.IsNewRow) return;
+            FiducialItem item = fiducialList.CurrentRow.Tag as FiducialItem;
+            if (item != null) { if (item.View != null) markingImage.Controls.Remove(item.View); fiducials.Remove(item); }
+            fiducialList.Rows.Remove(fiducialList.CurrentRow);
+        }
+
+        private void MoveUpClick(object sender, EventArgs e) { MoveSelected(-1); }
+        private void MoveDownClick(object sender, EventArgs e) { MoveSelected(1); }
+
+        private void MoveSelected(int direction)
+        {
+            if (selectedMarking == null) return;
+            int index = markings.IndexOf(selectedMarking);
+            int target = index + direction;
+            if (index < 0 || target < 0 || target >= markings.Count) return;
+            markings.RemoveAt(index);
+            markings.Insert(target, selectedMarking);
+            RebuildMarkingList();
+            SelectMarking(selectedMarking);
+        }
+
+        private void DeleteMarkingClick(object sender, EventArgs e)
+        {
+            if (selectedMarking == null) return;
+            if (selectedMarking.View != null) imageViewport.Controls.Remove(selectedMarking.View);
+            markings.Remove(selectedMarking);
+            selectedMarking = null;
+            RebuildMarkingList();
+        }
+
+        private void DeleteAllMarkingClick(object sender, EventArgs e)
+        {
+            foreach (MarkingItem item in markings)
+                if (item.View != null) imageViewport.Controls.Remove(item.View);
+            markings.Clear();
+            selectedMarking = null;
+            RebuildMarkingList();
+        }
+
+        private void RebuildMarkingList()
+        {
+            NormalizeMarkingOrder();
+            markingList.Rows.Clear();
+            foreach (MarkingItem item in markings)
+            {
+                PointF machinePosition = GetMarkingCoordinates(item);
+                int row = markingList.Rows.Add(GetMarkingNumber(item), item.Product, item.Type,
+                    FormatCoordinate(machinePosition.X), FormatCoordinate(machinePosition.Y));
+                markingList.Rows[row].Tag = item;
+            }
+        }
+
+        private static string GetMarkingNumber(MarkingItem item)
+        {
+            return string.IsNullOrWhiteSpace(item.Product) || item.Product == "0" ? item.Id.ToString() : item.Id.ToString();
+        }
+
+        private void NormalizeMarkingOrder()
+        {
+            for (int i = 0; i < markings.Count; i++)
+                markings[i].Id = i + 1;
+            nextMarkingId = markings.Count + 1;
+        }
+
+        private void AlignSelected(int mode)
+        {
+            SyncSelectedMarkingsFromListIfNeeded();
+            if (selectedMarkings.Count < 2) return;
+            float value = mode == 0 ? selectedMarkings.Min(item => item.Position.X) : mode == 2 ? selectedMarkings.Max(item => item.Position.X) : selectedMarkings.Average(item => item.Position.X);
+            float y = mode == 3 ? selectedMarkings.Min(item => item.Position.Y) : mode == 5 ? selectedMarkings.Max(item => item.Position.Y) : selectedMarkings.Average(item => item.Position.Y);
+            foreach (MarkingItem item in selectedMarkings)
+            {
+                if (mode <= 2) item.Position = new PointF(value, item.Position.Y);
+                else item.Position = new PointF(item.Position.X, y);
+                ClampPosition(item);
+                UpdateMarkingView(item); UpdateMarkingRow(item);
+            }
+            UpdatePositionControls(selectedMarking);
+        }
+
+        private void SyncSelectedMarkingsFromListIfNeeded()
+        {
+            if (selectedMarkings.Count > 0) return;
+
+            foreach (DataGridViewRow row in markingList.SelectedRows)
+            {
+                MarkingItem item = row.Tag as MarkingItem;
+                if (item != null && !selectedMarkings.Contains(item))
+                    selectedMarkings.Add(item);
+            }
+
+            if (selectedMarking == null && selectedMarkings.Count > 0)
+                selectedMarking = selectedMarkings[0];
+        }
+
+        private float MinX() { float value = float.MaxValue; foreach (MarkingItem item in markings) value = Math.Min(value, item.Position.X); return value; }
+        private float MaxX() { float value = float.MinValue; foreach (MarkingItem item in markings) value = Math.Max(value, item.Position.X); return value; }
+        private float MinY() { float value = float.MaxValue; foreach (MarkingItem item in markings) value = Math.Min(value, item.Position.Y); return value; }
+        private float MaxY() { float value = float.MinValue; foreach (MarkingItem item in markings) value = Math.Max(value, item.Position.Y); return value; }
+
+        private void DistributeSelected(bool horizontal)
+        {
+            if (markings.Count < 3 || selectedMarking == null) return;
+            List<MarkingItem> ordered = new List<MarkingItem>(selectedMarkings);
+            ordered.Sort((a, b) => horizontal ? a.Position.X.CompareTo(b.Position.X) : a.Position.Y.CompareTo(b.Position.Y));
+            float first = horizontal ? ordered[0].Position.X : ordered[0].Position.Y;
+            float last = horizontal ? ordered[ordered.Count - 1].Position.X : ordered[ordered.Count - 1].Position.Y;
+            for (int i = 1; i < ordered.Count - 1; i++)
+            {
+                float coordinate = first + (last - first) * i / (ordered.Count - 1);
+                ordered[i].Position = horizontal ? new PointF(coordinate, ordered[i].Position.Y) : new PointF(ordered[i].Position.X, coordinate);
+                ClampPosition(ordered[i]);
+                UpdateMarkingView(ordered[i]);
+                UpdateMarkingRow(ordered[i]);
+            }
+            UpdatePositionControls(selectedMarking);
+        }
     }
 }

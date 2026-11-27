@@ -2232,7 +2232,7 @@ namespace SLTtechSoft
                     SetDirection = formModel.laserSettingLayout.markings[IndexPatternAuto].Rotate;
                     // Set Direction : 0 or 90
                     SetTextPosition = formModel.laserSettingLayout.markings[IndexPatternAuto].Type;
-                    // set text position : Top, Bottom, Left, Right
+                    // set text position : Top, Bottom, Left, Right 
 
                     CurrentSerialNo = formModel.laserSettingLayout.markings[IndexPatternAuto].Content;
                     CurrentYMMDDN = formMain.txtYMMDDN.Text;
@@ -2257,7 +2257,7 @@ namespace SLTtechSoft
                         throw new Exception("Serial No or YMMDDN is Empty");
                     string DataEmpty = " ";
                     string DataCodeEmpty = " ";
-                    string CodeSend = CurrentYMMDDN + CurrentSerialNo;
+                    string CodeSend = CurrentYMMDDN + CurrentSerialNo+ CurrentRank;
 
                     string TextSend = CurrentSerialNo + Environment.NewLine + CurrentYMMDDN + Environment.NewLine + CurrentRank;
                     // Đoạn này sẽ kiểm tra xem là có phải dạng Text1, text 2, text 3 hay k

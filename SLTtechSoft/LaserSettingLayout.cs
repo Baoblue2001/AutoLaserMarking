@@ -3126,12 +3126,17 @@ namespace SLTtechSoft
                 previousFont.Dispose();
 
             // Measure at the base font, then scale the complete label only once.
-            int baseTextWidth = TextRenderer.MeasureText(
-                view.Text, new Font(Font.FontFamily, baseFontSize, FontStyle.Bold),
-                Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
-            int baseTextHeight = TextRenderer.MeasureText(
-                "Ag", new Font(Font.FontFamily, baseFontSize, FontStyle.Bold),
-                Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Height;
+            int baseTextWidth;
+            int baseTextHeight;
+            using (Font measureFont = new Font(Font.FontFamily, baseFontSize, FontStyle.Bold))
+            {
+                baseTextWidth = TextRenderer.MeasureText(
+                    view.Text, measureFont, Size.Empty,
+                    TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+                baseTextHeight = TextRenderer.MeasureText(
+                    "Ag", measureFont, Size.Empty,
+                    TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Height;
+            }
 
             int width = (int)Math.Ceiling((18f + baseTextWidth + 4f) * zoom);
             int height = (int)Math.Ceiling(Math.Max(24f, baseTextHeight + 6f) * zoom);

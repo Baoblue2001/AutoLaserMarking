@@ -27,6 +27,8 @@ namespace SLTtechSoft.Class
         private Bitmap _lastOutputImage;
         public Bitmap LastInputImage => _lastInputImage;
         public Bitmap LastOutputImage => _lastOutputImage;
+        public int LastInputWidth { get; private set; }
+        public int LastInputHeight { get; private set; }
         public string LastError { get; private set; } = "";
         public string LastResultSource { get; private set; } = "";
         public string LastResultText { get; private set; } = "";
@@ -84,6 +86,8 @@ namespace SLTtechSoft.Class
             LastError = "";
             LastResultSource = "";
             LastResultText = "";
+            LastInputWidth = inputImage.Width;
+            LastInputHeight = inputImage.Height;
 
             // Do not clone a full camera frame on every trigger. A 5~12 MP frame can be tens of MB,
             // and the old path cloned it several times before VisionMaster even started running.

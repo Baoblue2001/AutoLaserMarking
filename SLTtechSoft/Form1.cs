@@ -3518,7 +3518,6 @@ namespace SLTtechSoft
             IndexPatternAuto = 0;
             _autoMarkingCount = 0;
             _autoMesRequestTask = null;
-            _autoMesRequestStarted = false;
             AutoMarkingMesReady = false;
             AutoFiducialOffset = PointF.Empty;
             WriteLogPC(LogType.Main, "Auto Marking", reason);

@@ -145,7 +145,29 @@ namespace SLTtechSoft.Class
             if (_disposed || Procedure == null || string.IsNullOrWhiteSpace(outputName))
                 return false;
 
-            object resultObject = Procedure.ModuResult;
+            if (TryReadNumericOutputFromObject(Procedure.ModuResult, outputName, out value))
+                return true;
+
+            // VisionMaster projects often expose tool outputs on a module result rather
+            // than on Procedure.ModuResult. Search modules from last to first, matching
+            // the execution order used by TryGetResult().
+            object[] modules = ToObjectArray(EnumerateProcedureModules());
+            for (int i = modules.Length - 1; i >= 0; i--)
+            {
+                object module = modules[i];
+                if (module == null) continue;
+                object moduleResult = GetPropertyValue(module, "ModuResult");
+                if (TryReadNumericOutputFromObject(moduleResult, outputName, out value))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private bool TryReadNumericOutputFromObject(
+            object resultObject, string outputName, out double value)
+        {
+            value = 0d;
             if (resultObject == null) return false;
 
             object rawValue = GetPropertyOrFieldValue(resultObject, outputName);

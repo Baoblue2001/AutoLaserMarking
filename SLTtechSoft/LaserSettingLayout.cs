@@ -57,17 +57,33 @@ namespace SLTtechSoft
 
         private sealed class FiducialLabel : Label
         {
+            public float DisplayZoom { get; set; } = 1f;
+            public float MarkerCenterX { get { return 8f * Math.Max(0.05f, DisplayZoom); } }
+
             protected override void OnPaint(PaintEventArgs e)
             {
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                using (Pen pen = new Pen(Color.Red, 2f))
+                float scale = Math.Max(0.05f, DisplayZoom);
+                float centerX = MarkerCenterX;
+                float centerY = ClientSize.Height / 2f;
+                float arm = 7f * scale;
+
+                using (Pen pen = new Pen(Color.Red, Math.Max(1f, 1.6f * scale)))
                 using (Brush brush = new SolidBrush(Color.Red))
-                using (StringFormat format = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center })
+                using (StringFormat format = new StringFormat
                 {
-                    int centerY = ClientSize.Height / 2;
-                    e.Graphics.DrawLine(pen, 0, centerY, 14, centerY);
-                    e.Graphics.DrawLine(pen, 7, centerY - 7, 7, centerY + 7);
-                    e.Graphics.DrawString(Text, Font, brush, new RectangleF(17, 0, ClientSize.Width - 17, ClientSize.Height), format);
+                    Alignment = StringAlignment.Near,
+                    LineAlignment = StringAlignment.Center,
+                    FormatFlags = StringFormatFlags.NoWrap
+                })
+                {
+                    // The intersection of the plus sign is the exact fiducial coordinate.
+                    e.Graphics.DrawLine(pen, centerX - arm, centerY, centerX + arm, centerY);
+                    e.Graphics.DrawLine(pen, centerX, centerY - arm, centerX, centerY + arm);
+                    float textLeft = centerX + 10f * scale;
+                    RectangleF textBounds = new RectangleF(
+                        textLeft, 0, Math.Max(0, ClientSize.Width - textLeft), ClientSize.Height);
+                    e.Graphics.DrawString(Text, Font, brush, textBounds, format);
                 }
             }
         }
@@ -3006,7 +3022,16 @@ namespace SLTtechSoft
             PointF servoPosition = GetFiducialCoordinates(item);
             int row = fiducialList.Rows.Add(item.Id.ToString(), FormatCoordinate(servoPosition.X), FormatCoordinate(servoPosition.Y));
             fiducialList.Rows[row].Tag = item;
-            item.View = new FiducialLabel { AutoSize = false, Size = new Size(48, 24), Text = "F" + item.Id, Font = new Font(Font.FontFamily, 9f, FontStyle.Bold), ForeColor = Color.Red, BackColor = Color.Transparent, Tag = item, Cursor = Cursors.Hand };
+            item.View = new FiducialLabel
+            {
+                AutoSize = false,
+                Text = "",
+                Font = new Font(Font.FontFamily, 9f, FontStyle.Bold),
+                ForeColor = Color.Red,
+                BackColor = Color.Transparent,
+                Tag = item,
+                Cursor = Cursors.Hand
+            };
             item.View.MouseDown += FiducialMouseDown;
             item.View.MouseDown += PanMouseDown;
             item.View.MouseMove += PanMouseMove;
@@ -3079,10 +3104,44 @@ namespace SLTtechSoft
 
         private void UpdateFiducialView(FiducialItem item)
         {
-            if (item.View == null) return;
-            item.View.Left = (int)(item.Position.X * imageZoom) - item.View.Width / 2;
-            item.View.Top = (int)(item.Position.Y * imageZoom) - item.View.Height / 2;
-            item.View.BringToFront();
+            if (item == null || item.View == null) return;
+
+            FiducialLabel view = item.View as FiducialLabel;
+            if (view == null) return;
+
+            // Show the actual machine/servo coordinates beside the plus marker.
+            // The plus intersection itself remains exactly on item.Position.
+            PointF machinePosition = GetFiducialCoordinates(item);
+            view.Text = "F" + item.Id
+                + "  X:" + FormatCoordinate(machinePosition.X)
+                + "  Y:" + FormatCoordinate(machinePosition.Y);
+
+            float zoom = Math.Max(0.05f, imageZoom);
+            view.DisplayZoom = zoom;
+
+            const float baseFontSize = 9f;
+            Font previousFont = view.Font;
+            view.Font = new Font(Font.FontFamily, Math.Max(1f, baseFontSize * zoom), FontStyle.Bold);
+            if (previousFont != null && !ReferenceEquals(previousFont, Control.DefaultFont))
+                previousFont.Dispose();
+
+            // Measure at the base font, then scale the complete label only once.
+            int baseTextWidth = TextRenderer.MeasureText(
+                view.Text, new Font(Font.FontFamily, baseFontSize, FontStyle.Bold),
+                Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+            int baseTextHeight = TextRenderer.MeasureText(
+                "Ag", new Font(Font.FontFamily, baseFontSize, FontStyle.Bold),
+                Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Height;
+
+            int width = (int)Math.Ceiling((18f + baseTextWidth + 4f) * zoom);
+            int height = (int)Math.Ceiling(Math.Max(24f, baseTextHeight + 6f) * zoom);
+            view.Size = new Size(Math.Max(1, width), Math.Max(1, height));
+
+            // Fiducial position is the center of the red '+' rather than the center
+            // of the full text label, so adding coordinate text cannot shift the point.
+            view.Left = (int)Math.Round(item.Position.X * zoom - view.MarkerCenterX);
+            view.Top = (int)Math.Round(item.Position.Y * zoom - view.Height / 2f);
+            view.BringToFront();
         }
 
         private void UpdateAllFiducialViews() { foreach (FiducialItem item in fiducials) UpdateFiducialView(item); }
@@ -3108,6 +3167,7 @@ namespace SLTtechSoft
         }
         private void UpdateFiducialRow(FiducialItem item)
         {
+            if (item == null) return;
             PointF servoPosition = GetFiducialCoordinates(item);
             foreach (DataGridViewRow row in fiducialList.Rows)
                 if (row.Tag == item)
@@ -3116,6 +3176,9 @@ namespace SLTtechSoft
                     row.Cells[2].Value = FormatCoordinate(servoPosition.Y);
                     break;
                 }
+
+            // Keep the coordinate annotation next to the cross in sync with the table.
+            UpdateFiducialView(item);
         }
         private void DeleteAllFiducials()
         {

@@ -2316,15 +2316,24 @@ namespace SLTtechSoft
             if (item.View == null) return;
             bool vertical = item.Type == "TOPTEXT" || item.Type == "BOTTOMTEXT";
             string displayText = string.IsNullOrWhiteSpace(item.Content) ? item.Type : item.Content;
+            // Font metrics and control bounds must use the same zoom factor exactly once.
+            // Previously the font was enlarged by imageZoom, then the measured width/height
+            // were multiplied by imageZoom again, causing marking text boxes to grow too fast.
             Font previousFont = item.View.Font;
             item.View.Font = new Font("Times New Roman", Math.Max(1f, MarkingFontSize * imageZoom), FontStyle.Regular);
             if (previousFont != null && !ReferenceEquals(previousFont, Control.DefaultFont))
                 previousFont.Dispose();
+
             string[] textLines = displayText.Replace("\r\n", "\n").Split('\n');
             int textWidth = 0;
-            foreach (string line in textLines)
-                textWidth = Math.Max(textWidth, TextRenderer.MeasureText(line, item.View.Font).Width);
-            int textHeight = TextRenderer.MeasureText("Ag", item.View.Font).Height * textLines.Length;
+            int textHeight;
+            using (Font measureFont = new Font("Times New Roman", MarkingFontSize, FontStyle.Regular))
+            {
+                foreach (string line in textLines)
+                    textWidth = Math.Max(textWidth, TextRenderer.MeasureText(line, measureFont).Width);
+                textHeight = TextRenderer.MeasureText("Ag", measureFont).Height * textLines.Length;
+            }
+
             Size baseSize = item.Type == "CODE"
                 ? new Size(35, 35)
                 : vertical

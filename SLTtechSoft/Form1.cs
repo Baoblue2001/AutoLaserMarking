@@ -545,6 +545,7 @@ namespace SLTtechSoft
                 }
 
                 ReadDataPLC1();
+                AutoCheckFiducial();
                 AutoScanImage();
                 WriteDataPLC1();
             }
@@ -1640,6 +1641,8 @@ namespace SLTtechSoft
         int[] CountDelayErrorVision = new int[3];
         private void ProcessCam(int index)
         {
+            // Auto Fiducial owns the camera while its one-shot image is being acquired.
+            if (index == 0 && _autoFiducialOwnsCamera) return;
 
             if (MachineMode == ModeMachine.Manual)
             {
@@ -2768,6 +2771,333 @@ namespace SLTtechSoft
         public PointF AutoApplyFiducialOffsetXY(PointF teachPosition, PointF offset)
         {
             return new PointF(teachPosition.X + offset.X, teachPosition.Y + offset.Y);
+        }
+
+        // Auto Fiducial handshake:
+        // 0 = idle / wait PLC StartCheckFiducial rising edge
+        // 10 = camera trigger requested / wait VisionMaster completion
+        // 20 = wait PLC to release StartCheckFiducial
+        // 30 = all Fiducials complete / wait Require_CheckFiducial release
+        public int AutoFiducialVisionProcessIndex = 0;
+        public double AutoFiducialTimeoutSeconds = 5.0;
+        public PointF AutoFiducialOffset = PointF.Empty;
+        private int _autoFiducialState;
+        private bool _autoFiducialPreviousStart;
+        private bool _autoFiducialOwnsCamera;
+        private bool _autoFiducialFailed;
+        private int _autoFiducialIndex;
+        private int _autoFiducialCount;
+        private int _autoFiducialServoX;
+        private int _autoFiducialServoY;
+        private int _autoFiducialTeachId;
+        private int _autoFiducialPreviousVisionIndex;
+        private PointF _autoFiducialTeachMachine;
+        private DateTime _autoFiducialTriggerTime;
+        private readonly List<AutoFiducialPointData> _autoFiducialResults =
+            new List<AutoFiducialPointData>();
+
+        /// <summary>
+        /// Called immediately after ReadDataPLC1. A new Fiducial inspection starts only
+        /// on the rising edge of PLC StartCheckFiducial while Require_CheckFiducial is ON.
+        /// </summary>
+        public void AutoCheckFiducial()
+        {
+            if (IsTestNoPLC || MachineMode != ModeMachine.Auto ||
+                PLCDevice == null || PLCDevice[0] == null || !PLCDevice[0].IsConnected)
+                return;
+
+            bool startSignal = PLC.Read.AutoBits[PlcDic.StartCheckFiducial];
+            bool startRising = startSignal && !_autoFiducialPreviousStart;
+            _autoFiducialPreviousStart = startSignal;
+
+            switch (_autoFiducialState)
+            {
+                case 0:
+                    if (!startRising || !PLC.Read.AutoBits[PlcDic.Require_CheckFiducial])
+                        return;
+                    AutoBeginFiducialCapture();
+                    break;
+
+                case 10:
+                    if (_VisionSystem == null || _VisionSystem.Length == 0 ||
+                        _VisionSystem[0] == null)
+                    {
+                        AutoFailFiducial("Camera 1 is not initialized.");
+                        return;
+                    }
+
+                    if (_VisionSystem[0].FinishTrigger)
+                        AutoCompleteFiducialCapture();
+                    else if ((DateTime.Now - _autoFiducialTriggerTime).TotalSeconds >=
+                             Math.Max(1.0, AutoFiducialTimeoutSeconds))
+                        AutoFailFiducial("Timed out waiting for Fiducial camera/VisionMaster result.");
+                    break;
+
+                case 20:
+                    if (!startSignal)
+                    {
+                        PLC.Write.AutoBits[PlcDic.CheckFiducialOneDone] = false;
+                        if (_autoFiducialFailed)
+                        {
+                            _autoFiducialIndex = 0;
+                            _autoFiducialResults.Clear();
+                            _autoFiducialFailed = false;
+                            _autoFiducialState = 0;
+                        }
+                        else if (_autoFiducialIndex >= _autoFiducialCount)
+                        {
+                            PointF offset;
+                            double maxResidual;
+                            string error;
+                            if (AutoCalculateFiducialOffsetXY(
+                                _autoFiducialResults, 0d, out offset, out maxResidual, out error))
+                            {
+                                AutoFiducialOffset = offset;
+                                PLC.Write.AutoBits[PlcDic.ResultFace_Corrrect] = true;
+                                PLC.Write.AutoBits[PlcDic.CheckFiducialALLDone] = true;
+                                WriteLogPC(LogType.Vision, "Auto Fiducial",
+                                    "All Fiducials passed. Offset X=" +
+                                    offset.X.ToString("0.###") + ", Y=" +
+                                    offset.Y.ToString("0.###") + ", Max residual=" +
+                                    maxResidual.ToString("0.###"));
+                                _autoFiducialState = 30;
+                            }
+                            else
+                            {
+                                AutoFailFiducial(error);
+                            }
+                        }
+                        else
+                        {
+                            _autoFiducialState = 0;
+                        }
+                    }
+                    break;
+
+                case 30:
+                    if (!PLC.Read.AutoBits[PlcDic.Require_CheckFiducial])
+                    {
+                        PLC.Write.AutoBits[PlcDic.CheckFiducialALLDone] = false;
+                        PLC.Write.AutoBits[PlcDic.ResultFace_Corrrect] = false;
+                        _autoFiducialIndex = 0;
+                        _autoFiducialCount = 0;
+                        _autoFiducialResults.Clear();
+                        AutoFiducialOffset = PointF.Empty;
+                        _autoFiducialState = 0;
+                    }
+                    break;
+            }
+        }
+
+        private void AutoBeginFiducialCapture()
+        {
+            if (_VisionSystem == null || _VisionSystem.Length == 0 ||
+                _VisionSystem[0] == null || _VisionSystem[0].CAM == null ||
+                !_VisionSystem[0].CAM.IsOpen)
+            {
+                AutoFailFiducial("Camera 1 is not connected.");
+                return;
+            }
+            if (IsTestNoCam == null || IsTestNoCam.Length == 0 || IsTestNoCam[0])
+            {
+                AutoFailFiducial("Camera 1 is disabled in Test mode.");
+                return;
+            }
+            if (_VisionSystem[0].CAM.AcquisitionMode == CameraAcquisitionMode.Continuous)
+            {
+                AutoFailFiducial("Fiducial inspection requires the camera to be in software-trigger mode.");
+                return;
+            }
+            if (!_VisionSystem[0].IsVisionProcessInitial ||
+                _VisionSystem[0].VisionProcesses == null ||
+                AutoFiducialVisionProcessIndex < 0 ||
+                AutoFiducialVisionProcessIndex >= _VisionSystem[0].VisionProcesses.Length ||
+                _VisionSystem[0].VisionProcesses[AutoFiducialVisionProcessIndex] == null)
+            {
+                AutoFailFiducial("Fiducial VisionMaster process is not loaded. Check the configured process index.");
+                return;
+            }
+            if (ProcessIndex == null || ProcessIndex.Length == 0 || ProcessIndex[0] != 0 ||
+                PLC.Read.AutoBits[PlcDic.TriggerCam[0]])
+            {
+                AutoFailFiducial("Camera 1 is busy with another PLC trigger. Retry Fiducial after it is released.");
+                return;
+            }
+
+            int fiducialId;
+            PointF teachMachine;
+            int fiducialCount;
+            string layoutError;
+            if (!AutoReadFiducialTeachPoint(_autoFiducialIndex,
+                    out fiducialId, out teachMachine, out fiducialCount, out layoutError))
+            {
+                AutoFailFiducial(layoutError);
+                return;
+            }
+
+            if (_autoFiducialIndex == 0)
+            {
+                _autoFiducialCount = fiducialCount;
+                _autoFiducialResults.Clear();
+                AutoFiducialOffset = PointF.Empty;
+                PLC.Write.AutoBits[PlcDic.CheckFiducialALLDone] = false;
+                PLC.Write.AutoBits[PlcDic.ResultFace_Corrrect] = false;
+            }
+
+            _autoFiducialTeachId = fiducialId;
+            _autoFiducialTeachMachine = teachMachine;
+            _autoFiducialServoX = PLC.Read.WordIntegers[PlcDic.CurentPosX];
+            _autoFiducialServoY = PLC.Read.WordIntegers[PlcDic.CurentPosY];
+            _autoFiducialPreviousVisionIndex = _VisionSystem[0].TriggerIndex;
+            _VisionSystem[0].TriggerIndex = AutoFiducialVisionProcessIndex;
+            _VisionSystem[0].FinishTrigger = false;
+            _VisionSystem[0].ErrorGrap = false;
+            _VisionSystem[0].TriggerOne = true;
+            _autoFiducialTriggerTime = DateTime.Now;
+            _autoFiducialOwnsCamera = true;
+            _autoFiducialFailed = false;
+            PLC.Write.AutoBits[PlcDic.CheckFiducialOneDone] = false;
+            _autoFiducialState = 10;
+
+            WriteLogPC(LogType.Vision, "Auto Fiducial",
+                "Capture requested for Fiducial ID " + _autoFiducialTeachId +
+                " at servo X=" + _autoFiducialServoX + ", Y=" + _autoFiducialServoY);
+        }
+
+        private bool AutoReadFiducialTeachPoint(
+            int index, out int fiducialId, out PointF teachMachine,
+            out int fiducialCount, out string error)
+        {
+            fiducialId = -1;
+            teachMachine = PointF.Empty;
+            fiducialCount = 0;
+            error = "";
+
+            if (formModel == null || formModel.laserSettingLayout == null)
+            {
+                error = "Laser Setting Model is not initialized.";
+                return false;
+            }
+
+            try
+            {
+                Func<bool> read = () => formModel.laserSettingLayout.TryGetAutoFiducialMachinePosition(
+                    index, out fiducialId, out teachMachine, out fiducialCount);
+
+                bool valid = InvokeRequired ? (bool)Invoke(read) : read();
+                if (!valid)
+                {
+                    error = fiducialCount == 0
+                        ? "No Fiducial points are configured on the active Model surface."
+                        : "Fiducial index " + index + " has no valid saved machine coordinate.";
+                }
+                return valid;
+            }
+            catch (Exception ex)
+            {
+                error = "Could not read Model Fiducial coordinates: " + ex.Message;
+                return false;
+            }
+        }
+
+        private void AutoCompleteFiducialCapture()
+        {
+            _autoFiducialOwnsCamera = false;
+            _VisionSystem[0].TriggerOne = false;
+            _VisionSystem[0].TriggerIndex = _autoFiducialPreviousVisionIndex;
+
+            VisionMasterProcess process =
+                _VisionSystem[0].VisionProcesses[AutoFiducialVisionProcessIndex];
+
+            if (_VisionSystem[0].ErrorGrap || _VisionSystem[0].ResultTriggerOne == 0)
+            {
+                AutoFailFiducial("VisionMaster inspection returned NG or camera acquisition failed.");
+                return;
+            }
+
+            PointF pixel;
+            string error;
+            if (!AutoTryGetFiducialVisionPixel(
+                0, AutoFiducialVisionProcessIndex, out pixel, out error))
+            {
+                AutoFailFiducial(error);
+                return;
+            }
+
+            PointF actualMachine;
+            Func<bool> convert = () => formModel.laserSettingLayout.TryConvertAutoFramePixelToMachine(
+                _autoFiducialServoX, _autoFiducialServoY,
+                process.LastInputWidth, process.LastInputHeight,
+                pixel.X, pixel.Y, out actualMachine);
+
+            bool converted;
+            try { converted = InvokeRequired ? (bool)Invoke(convert) : convert(); }
+            catch (Exception ex)
+            {
+                AutoFailFiducial("Pixel-to-machine conversion failed: " + ex.Message);
+                return;
+            }
+
+            if (!converted)
+            {
+                AutoFailFiducial("Could not convert Fiducial pixel coordinates using the active Model mm/px scale.");
+                return;
+            }
+
+            int plcX;
+            int plcY;
+            try
+            {
+                plcX = checked((int)Math.Round(actualMachine.X, MidpointRounding.AwayFromZero));
+                plcY = checked((int)Math.Round(actualMachine.Y, MidpointRounding.AwayFromZero));
+            }
+            catch (OverflowException)
+            {
+                AutoFailFiducial("Measured Fiducial machine coordinate exceeds the PLC integer range.");
+                return;
+            }
+
+            // This result belongs to Fiducial, so write only to the Fiducial PLC coordinate pair.
+            PLC.Write.WordIntegers[PlcDic.CheckFiducial_PosX] = plcX;
+            PLC.Write.WordIntegers[PlcDic.CheckFiducial_PosY] = plcY;
+
+            _autoFiducialResults.Add(new AutoFiducialPointData
+            {
+                Id = _autoFiducialTeachId,
+                TeachPosition = _autoFiducialTeachMachine,
+                ActualPosition = actualMachine
+            });
+
+            PLC.Write.AutoBits[PlcDic.CheckFiducialOneDone] = true;
+            _autoFiducialIndex++;
+
+            WriteLogPC(LogType.Vision, "Auto Fiducial",
+                "Fiducial ID " + _autoFiducialTeachId +
+                " detected at pixel X=" + pixel.X.ToString("0.00") +
+                ", Y=" + pixel.Y.ToString("0.00") +
+                "; machine X=" + actualMachine.X.ToString("0.###") +
+                ", Y=" + actualMachine.Y.ToString("0.###"));
+
+            _autoFiducialState = 20;
+        }
+
+        private void AutoFailFiducial(string error)
+        {
+            _autoFiducialOwnsCamera = false;
+            _autoFiducialFailed = true;
+            if (_VisionSystem != null && _VisionSystem.Length > 0 && _VisionSystem[0] != null)
+            {
+                _VisionSystem[0].TriggerOne = false;
+                _VisionSystem[0].FinishTrigger = false;
+                _VisionSystem[0].TriggerIndex = _autoFiducialPreviousVisionIndex;
+            }
+
+            PLC.Write.AutoBits[PlcDic.CheckFiducialOneDone] = true;
+            PLC.Write.AutoBits[PlcDic.CheckFiducialALLDone] = false;
+            PLC.Write.AutoBits[PlcDic.ResultFace_Corrrect] = false;
+            _autoFiducialState = 20;
+            WriteLogPC(LogType.Vision, "Auto Fiducial NG",
+                string.IsNullOrWhiteSpace(error) ? "Unknown Fiducial inspection error." : error);
         }
 
         #endregion AUTO LASER MARKING - SHARED CORE

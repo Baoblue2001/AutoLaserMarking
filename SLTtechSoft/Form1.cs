@@ -2853,7 +2853,12 @@ namespace SLTtechSoft
         {
             if (IsTestNoPLC || MachineMode != ModeMachine.Auto ||
                 PLCDevice == null || PLCDevice[0] == null || !PLCDevice[0].IsConnected)
+            {
+                _autoFiducialState=0;
+                _autoFiducialPreviousStart = false;
                 return;
+            }    
+                
 
             bool startSignal = PLC.Read.AutoBits[PlcDic.StartCheckFiducial];
             bool startRising = startSignal && !_autoFiducialPreviousStart;

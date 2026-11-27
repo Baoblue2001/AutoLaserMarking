@@ -91,7 +91,9 @@ namespace SLTtechSoft
             AppLanguage savedLanguage = LanguageManager.Parse(Properties.Settings.Default.UiLanguage);
             ChangeLanguage(savedLanguage, false);
         }
-
+        /// <summary>
+        /// The context menu used to select the application language.Language selector
+        /// </summary>
         private ContextMenuStrip _languageMenu;
         private PictureBox _languageFlag;
         private Label _languageCaption;
@@ -1837,10 +1839,10 @@ namespace SLTtechSoft
 
             return thisImageRun.Image == null ? null : thisImageRun;
         }
-        private int VisionRun(int cam, int index, ImageInfo imageInput, bool isFitImage)
-        {
-            return VisionRun(cam, index, imageInput, isFitImage, false);
-        }
+        //private int VisionRun(int cam, int index, ImageInfo imageInput, bool isFitImage)
+        //{
+        //    return VisionRun(cam, index, imageInput, isFitImage, false);
+        //}
         private int VisionRun(int cam, int index, ImageInfo imageInput, bool isFitImage, bool isFilmStrip)
         {
             lock (_visionRuntimeSync)

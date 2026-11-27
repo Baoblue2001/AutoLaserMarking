@@ -2567,6 +2567,211 @@ namespace SLTtechSoft
      
       
        
+        #region AUTO LASER MARKING - SHARED CORE
+
+        // Configure these names to match the numeric outputs in the Fiducial VisionMaster PRC.
+        // Leave empty until the PRC output names are confirmed; Auto must fail closed if not configured.
+        public string AutoFiducialXOutputName = "";
+        public string AutoFiducialYOutputName = "";
+
+        public sealed class AutoFiducialPointData
+        {
+            public int Id { get; set; }
+            public PointF TeachPosition { get; set; }
+            public PointF ActualPosition { get; set; }
+        }
+
+        /// <summary>
+        /// Reads the detected Fiducial center in camera-image pixels from the last VisionMaster run.
+        /// This method does not trigger the camera or move the axes.
+        /// </summary>
+        public bool AutoTryGetFiducialVisionPixel(
+            int cameraIndex, int processIndex, out PointF imagePixel, out string error)
+        {
+            imagePixel = PointF.Empty;
+            error = "";
+
+            if (string.IsNullOrWhiteSpace(AutoFiducialXOutputName) ||
+                string.IsNullOrWhiteSpace(AutoFiducialYOutputName))
+            {
+                error = "Fiducial VisionMaster X/Y output names have not been configured.";
+                return false;
+            }
+
+            if (_VisionSystem == null || cameraIndex < 0 || cameraIndex >= _VisionSystem.Length ||
+                _VisionSystem[cameraIndex] == null ||
+                _VisionSystem[cameraIndex].VisionProcesses == null ||
+                processIndex < 0 || processIndex >= _VisionSystem[cameraIndex].VisionProcesses.Length)
+            {
+                error = "Fiducial VisionMaster camera/process index is invalid.";
+                return false;
+            }
+
+            VisionMasterProcess process = _VisionSystem[cameraIndex].VisionProcesses[processIndex];
+            if (process == null)
+            {
+                error = "Fiducial VisionMaster process is not loaded.";
+                return false;
+            }
+
+            double x;
+            double y;
+            if (!process.TryGetNumericOutput(AutoFiducialXOutputName, out x))
+            {
+                error = "VisionMaster X output was not found or is not numeric: " + AutoFiducialXOutputName;
+                return false;
+            }
+            if (!process.TryGetNumericOutput(AutoFiducialYOutputName, out y))
+            {
+                error = "VisionMaster Y output was not found or is not numeric: " + AutoFiducialYOutputName;
+                return false;
+            }
+            if (x < 0 || y < 0 || x > float.MaxValue || y > float.MaxValue)
+            {
+                error = "VisionMaster Fiducial pixel coordinate is outside the supported range.";
+                return false;
+            }
+
+            imagePixel = new PointF((float)x, (float)y);
+            return true;
+        }
+
+        /// <summary>
+        /// Calculates translation-only X/Y offset from multiple matched Teach/Actual Fiducials.
+        /// Rotation is intentionally not calculated. maxAllowedResidual <= 0 disables the residual limit.
+        /// </summary>
+        public bool AutoCalculateFiducialOffsetXY(
+            IList<AutoFiducialPointData> points,
+            double maxAllowedResidual,
+            out PointF offset,
+            out double maxResidual,
+            out string error)
+        {
+            offset = PointF.Empty;
+            maxResidual = 0d;
+            error = "";
+
+            if (points == null || points.Count == 0)
+            {
+                error = "No Fiducial points were supplied.";
+                return false;
+            }
+            if (maxAllowedResidual < 0 || double.IsNaN(maxAllowedResidual) ||
+                double.IsInfinity(maxAllowedResidual))
+            {
+                error = "The maximum Fiducial residual limit is invalid.";
+                return false;
+            }
+
+            double sumX = 0d;
+            double sumY = 0d;
+            foreach (AutoFiducialPointData point in points)
+            {
+                if (point == null ||
+                    float.IsNaN(point.TeachPosition.X) || float.IsInfinity(point.TeachPosition.X) ||
+                    float.IsNaN(point.TeachPosition.Y) || float.IsInfinity(point.TeachPosition.Y) ||
+                    float.IsNaN(point.ActualPosition.X) || float.IsInfinity(point.ActualPosition.X) ||
+                    float.IsNaN(point.ActualPosition.Y) || float.IsInfinity(point.ActualPosition.Y))
+                {
+                    error = "A Fiducial Teach/Actual coordinate is invalid.";
+                    return false;
+                }
+
+                sumX += point.ActualPosition.X - point.TeachPosition.X;
+                sumY += point.ActualPosition.Y - point.TeachPosition.Y;
+            }
+
+            double offsetX = sumX / points.Count;
+            double offsetY = sumY / points.Count;
+            if (double.IsNaN(offsetX) || double.IsInfinity(offsetX) ||
+                double.IsNaN(offsetY) || double.IsInfinity(offsetY) ||
+                Math.Abs(offsetX) > float.MaxValue || Math.Abs(offsetY) > float.MaxValue)
+            {
+                error = "Calculated Fiducial offset is invalid.";
+                return false;
+            }
+
+            foreach (AutoFiducialPointData point in points)
+            {
+                double dx = (point.ActualPosition.X - point.TeachPosition.X) - offsetX;
+                double dy = (point.ActualPosition.Y - point.TeachPosition.Y) - offsetY;
+                double residual = Math.Sqrt(dx * dx + dy * dy);
+                if (residual > maxResidual) maxResidual = residual;
+            }
+
+            if (maxAllowedResidual > 0d && maxResidual > maxAllowedResidual)
+            {
+                error = "Fiducial residual exceeds the configured limit. Max residual: " +
+                    maxResidual.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+                return false;
+            }
+
+            offset = new PointF((float)offsetX, (float)offsetY);
+            return true;
+        }
+
+        /// <summary>
+        /// Resolves the serial for one Marking List row. Product No is zero-based and
+        /// must be within the Array Count returned by MES. The original serial width is preserved.
+        /// </summary>
+        public bool AutoTryGetSerialNumber(
+            string mesStartSerial,
+            string productNo,
+            int arrayCount,
+            out string serialNumber,
+            out string error)
+        {
+            serialNumber = "";
+            error = "";
+
+            long startSerial;
+            int productIndex;
+            if (string.IsNullOrWhiteSpace(mesStartSerial) ||
+                !long.TryParse(mesStartSerial.Trim(), System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out startSerial))
+            {
+                error = "MES start Serial Number is empty or invalid.";
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(productNo) ||
+                !int.TryParse(productNo.Trim(), System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out productIndex))
+            {
+                error = "Marking List Product No is invalid: " + (productNo ?? "");
+                return false;
+            }
+            if (arrayCount <= 0 || productIndex < 0 || productIndex >= arrayCount)
+            {
+                error = "Product No is outside the MES Array Count range.";
+                return false;
+            }
+
+            try
+            {
+                long resolved = checked(startSerial + productIndex);
+                serialNumber = resolved.ToString(
+                    new string('0', Math.Max(1, mesStartSerial.Trim().Length)),
+                    System.Globalization.CultureInfo.InvariantCulture);
+                return true;
+            }
+            catch (OverflowException)
+            {
+                error = "Resolved Serial Number exceeds the supported numeric range.";
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Applies translation-only X/Y offset to a Teach machine coordinate.
+        /// The original Marking List coordinate is not modified.
+        /// </summary>
+        public PointF AutoApplyFiducialOffsetXY(PointF teachPosition, PointF offset)
+        {
+            return new PointF(teachPosition.X + offset.X, teachPosition.Y + offset.Y);
+        }
+
+        #endregion AUTO LASER MARKING - SHARED CORE
+
         #region Variables
         //Các biến test máy
         public static bool IsTestNoPLC = true;

@@ -62,6 +62,10 @@ namespace SLTtechSoft
 
             protected override void OnPaint(PaintEventArgs e)
             {
+                // Let the standard WinForms Label renderer draw the ID text.
+                // It avoids GDI+ DrawString failures while the fiducial is being dragged.
+                base.OnPaint(e);
+
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                 float scale = Math.Max(0.05f, DisplayZoom);
                 float centerX = MarkerCenterX;
@@ -69,27 +73,10 @@ namespace SLTtechSoft
                 float arm = 7f * scale;
 
                 using (Pen pen = new Pen(Color.Red, Math.Max(1f, 1.6f * scale)))
-                using (Brush brush = new SolidBrush(Color.Red))
-                using (StringFormat format = new StringFormat
-                {
-                    Alignment = StringAlignment.Near,
-                    LineAlignment = StringAlignment.Center,
-                    FormatFlags = StringFormatFlags.NoWrap
-                })
                 {
                     // The intersection of the plus sign is the exact fiducial coordinate.
                     e.Graphics.DrawLine(pen, centerX - arm, centerY, centerX + arm, centerY);
                     e.Graphics.DrawLine(pen, centerX, centerY - arm, centerX, centerY + arm);
-                    float textLeft = centerX + 10f * scale;
-                    float textWidth = ClientSize.Width - textLeft;
-                    // DrawString throws ArgumentException when the layout rectangle
-                    // has zero/negative dimensions (possible during the first layout).
-                    if (!string.IsNullOrEmpty(Text) && textWidth > 1f && ClientSize.Height > 1)
-                    {
-                        RectangleF textBounds = new RectangleF(
-                            textLeft, 0, textWidth, ClientSize.Height);
-                        e.Graphics.DrawString(Text, Font, brush, textBounds, format);
-                    }
                 }
             }
         }
@@ -3035,6 +3022,7 @@ namespace SLTtechSoft
                 Font = new Font(Font.FontFamily, 9f, FontStyle.Bold),
                 ForeColor = Color.Red,
                 BackColor = Color.Transparent,
+                TextAlign = ContentAlignment.MiddleLeft,
                 Tag = item,
                 Cursor = Cursors.Hand
             };
@@ -3135,13 +3123,17 @@ namespace SLTtechSoft
                     TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Height;
             }
 
-            Font previousFont = view.Font;
-            view.Font = new Font(Font.FontFamily, Math.Max(1f, baseFontSize * zoom), FontStyle.Bold);
-            if (previousFont != null && !ReferenceEquals(previousFont, Control.DefaultFont))
-                previousFont.Dispose();
+            float targetFontSize = Math.Max(1f, baseFontSize * zoom);
+            // Do not recreate/dispose the Font on every MouseMove. Replacing it while
+            // WinForms is repainting the label can leave GDI+ with an invalid Font.
+            if (Math.Abs(view.Font.Size - targetFontSize) > 0.1f)
+                view.Font = new Font(view.Font.FontFamily, targetFontSize, FontStyle.Bold);
+
+            // Reserve a zoom-scaled left margin for the plus; Label paints the ID itself.
+            view.Padding = new Padding((int)Math.Ceiling(20f * zoom), 0, 0, 0);
 
             // Scale the marker and its short ID label once, using base-font metrics.
-            int width = (int)Math.Ceiling((18f + baseTextWidth + 8f) * zoom);
+            int width = (int)Math.Ceiling((20f + baseTextWidth + 8f) * zoom);
             int height = (int)Math.Ceiling(Math.Max(24f, baseTextHeight + 6f) * zoom);
             view.Size = new Size(Math.Max(1, width), Math.Max(1, height));
 

@@ -575,7 +575,7 @@ namespace SLTtechSoft
             }
             else
             {
-                if (txtSerialNo.Text != "" || txtSerialNo.Text != null)
+                if (string.IsNullOrWhiteSpace(txtSerialNo.Text))
                 {
                     txtSerialNo.Text = "000001";
                 }

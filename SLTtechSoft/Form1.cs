@@ -3328,6 +3328,10 @@ namespace SLTtechSoft
                         AutoResetMarkingProcess("Marking cycle completed and PLC released StartMarkingProcess.");
                     }
                     break;
+
+                case 99:
+                    // Error latched. Wait for PLC to release StartMarkingProcess before retry.
+                    break;
             }
         }
 
@@ -3434,14 +3438,10 @@ namespace SLTtechSoft
                 return false;
             }
 
-            WriteLogPC(LogType.Mes, "MES", "MES Lot information received for Lot " + lotNoSafe(response));
+            WriteLogPC(LogType.Mes, "MES", "MES data received. Barcode=" + (response.Code ?? "") + ", Serial=" + (response.SerialNo ?? ""));
             return true;
         }
 
-        private static string lotNoSafe(DataInfomationSend data)
-        {
-            return data == null ? "" : (data.Code ?? "");
-        }
 
         private bool AutoTryGetMarkingCount(out int count)
         {
@@ -3503,7 +3503,7 @@ namespace SLTtechSoft
                 _autoMarkingErrorLogged = true;
             }
             // Hold at idle until PLC drops StartMarkingProcess; no false completion is sent.
-            AutoMarkingProcessIndex = 0;
+            AutoMarkingProcessIndex = 99;
             _autoMesRequestTask = null;
             AutoMarkingMesReady = false;
         }

@@ -2799,8 +2799,8 @@ namespace SLTtechSoft
         {
             int x, y;
             if (!AutoTryConvertPlcCoordinate(machinePosition, out x, out y)) return false;
-            PLC.Write.WordIntegers[PlcDic.MarkingPosX] = x;
-            PLC.Write.WordIntegers[PlcDic.MarkingPosY] = y;
+            PLC.Write.WordIntegers[PlcDic.MarkingPosX] = x*1000;
+            PLC.Write.WordIntegers[PlcDic.MarkingPosY] = y*1000;
             return true;
         }
 
